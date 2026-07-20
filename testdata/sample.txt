@@ -1,0 +1,32 @@
+敏感信息扫描测试样本（覆盖 13 类模式）
+
+[联系方式]
+手机: 13812345678
+备用: 15987654321
+邮箱: zhangsan@company.com
+
+[身份信息]
+身份证号: 11010519900307234X
+身份证 440308199001011234
+银行卡: 4111111111111111
+
+[凭据]
+username: admin
+api_key: ak_live_1234567890abcdef
+password: P@ssw0rd2024
+access_token: eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.SflKxwRSMeKKF2QT4abc123def
+database: Data Source=10.0.0.1;User ID=root;Password=root123
+
+[网络]
+服务器IP: 192.168.1.100
+网关: 10.0.0.1
+文档地址: https://docs.example.com/api
+
+[路径]
+配置目录: C:\Users\admin\app\config
+日志目录: D:\logs\app.log
+
+[密钥文件]
+-----BEGIN RSA PRIVATE KEY-----
+MIIEowIBAAKCAQEAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+-----END RSA PRIVATE KEY-----

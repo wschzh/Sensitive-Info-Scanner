@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>敏感信息扫描工具</title>
+<style>
+  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 20px; background: #f5f5f5; color: #333; }
+  h1 { font-size: 20px; }
+  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  label { display: inline-block; margin-right: 8px; }
+  input[type=text], input[type=number] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+  button { padding: 8px 16px; border: none; border-radius: 4px; background: #3498db; color: #fff; cursor: pointer; margin-right: 8px; }
+  button:disabled { background: #aaa; cursor: not-allowed; }
+  button.danger { background: #e74c3c; }
+  button.ghost { background: #7f8c8d; }
+  .progress { width: 100%; height: 18px; background: #eee; border-radius: 9px; overflow: hidden; }
+  .progress-bar { height: 100%; background: #3498db; transition: width .2s; width: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
+  th { background: #f0f0f0; position: sticky; top: 0; }
+  .lv-critical { color: #e74c3c; font-weight: bold; }
+  .lv-high { color: #e67e22; font-weight: bold; }
+  .lv-medium { color: #b7950b; }
+  .lv-low { color: #3498db; }
+  .stats span { margin-right: 16px; }
+  .muted { color: #888; font-size: 12px; }
+</style>
+</head>
+<body>
+<div style="display:flex;justify-content:space-between;align-items:center">
+  <h1>🔍 敏感信息扫描工具</h1>
+  <span style="color:#999;font-size:13px">powered by cz</span>
+</div>
+
+<div class="card">
+  <div><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label></div>
+  <div style="margin-top:8px">
+    <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
+    <label>最大文件(MB): <input type="number" id="maxsize" value="10" style="width:60px"></label>
+    级别:
+    <label><input type="checkbox" class="lvl" value="critical" checked>严重</label>
+    <label><input type="checkbox" class="lvl" value="high" checked>高级</label>
+    <label><input type="checkbox" class="lvl" value="medium" checked>中级</label>
+    <label><input type="checkbox" class="lvl" value="low" checked>低级</label>
+  </div>
+  <div style="margin-top:10px">
+    <button id="btnScan" onclick="startScan()">开始扫描</button>
+    <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
+    <button class="ghost" onclick="exportReport('text')">导出 Text</button>
+    <button class="ghost" onclick="exportReport('json')">导出 JSON</button>
+  </div>
+</div>
+
+<div class="card">
+  <div class="progress"><div class="progress-bar" id="bar"></div></div>
+  <div class="stats" id="stats" style="margin-top:8px">就绪</div>
+</div>
+
+<div class="card">
+  <table>
+    <thead><tr><th>级别</th><th>类型</th><th>文件</th><th>行</th><th>匹配内容</th></tr></thead>
+    <tbody id="results"></tbody>
+  </table>
+</div>
+
+<script>
+let scanning = false;
+
+async function startScan() {
+  const path = document.getElementById('path').value.trim();
+  if (!path) { alert('请输入扫描路径'); return; }
+  const levels = [...document.querySelectorAll('.lvl:checked')].map(e => e.value);
+  const body = {
+    path,
+    recursive: document.getElementById('recursive').checked,
+    max_size: parseInt(document.getElementById('maxsize').value) * 1024 * 1024,
+    levels
+  };
+  document.getElementById('btnScan').disabled = true;
+  const res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
+  if (!res.ok) { document.getElementById('btnScan').disabled = false; alert(await res.text()); return; }
+  scanning = true;
+  document.getElementById('btnStop').disabled = false;
+  document.getElementById('results').innerHTML = '';
+  poll();
+}
+
+function stopScan() { fetch('/api/stop', {method:'POST'}); }
+
+async function poll() {
+  if (!scanning) return;
+  try {
+    const r = await (await fetch('/api/progress')).json();
+    document.getElementById('bar').style.width = r.progress + '%';
+    document.getElementById('stats').innerHTML =
+      `<span>进度: ${r.progress}%</span><span class="muted">${r.current_file||''}</span>` +
+      `<span>已扫描: ${r.stats.scanned_files}/${r.stats.total_files}</span><span>问题: ${r.stats.total_issues}</span>`;
+    if (!r.scanning) {
+      scanning = false;
+      document.getElementById('btnScan').disabled = false;
+      document.getElementById('btnStop').disabled = true;
+      await loadResults();
+      return;
+    }
+  } catch(e) {}
+  setTimeout(poll, 300);
+}
+
+async function loadResults() {
+  const r = await (await fetch('/api/results')).json();
+  const tbody = document.getElementById('results');
+  tbody.innerHTML = '';
+  const lvName = {critical:'严重', high:'高级', medium:'中级', low:'低级'};
+  for (const it of r.results) {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      `<td class="lv-${it.level}">${lvName[it.level]||it.level}</td>` +
+      `<td>${it.pattern_name}</td>` +
+      `<td class="muted" title="${escapeHtml(it.file_path)}">${shortPath(it.file_path)}</td>` +
+      `<td>${it.line_number}</td>` +
+      `<td>${escapeHtml(it.matched_text)}</td>`;
+    tbody.appendChild(tr);
+  }
+  if (r.results.length === 0) {
+    document.getElementById('stats').innerHTML += ' — 未发现敏感信息';
+  }
+}
+
+function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
+function shortPath(p) { return p.length <= 50 ? p : '…' + p.slice(-49); }
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+</script>
+</body>
+</html>
