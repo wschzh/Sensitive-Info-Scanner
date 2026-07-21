@@ -25,9 +25,17 @@
   .lv-low { color: #3498db; }
   .stats span { margin-right: 16px; }
   .muted { color: #888; font-size: 12px; }
+  .warn { color: #e67e22; font-weight: bold; }
   .toolbar { margin-bottom: 10px; padding: 8px; background: #fafafa; border-radius: 6px; font-size: 13px; }
   .toolbar select { margin: 0 4px; }
   .pager { margin-top: 10px; text-align: center; color: #666; font-size: 13px; }
+  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid #e0e0e0; }
+  .tab { padding: 8px 24px; background: #e0e0e0; border: none; border-radius: 6px 6px 0 0; cursor: pointer; color: #333; margin: 0; }
+  .tab.active { background: #3498db; color: #fff; }
+  .rule-level-title { font-size: 15px; font-weight: bold; margin: 16px 0 6px; }
+  .rule-card { background: #fff; border-left: 4px solid #3498db; padding: 10px 12px; margin-bottom: 8px; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  .rule-regex { font-family: "SF Mono", Consolas, monospace; background: #f5f5f5; padding: 6px 8px; border-radius: 3px; word-break: break-all; font-size: 12px; margin: 4px 0; }
+  .rule-example { font-family: "SF Mono", Consolas, monospace; color: #666; font-size: 12px; word-break: break-all; margin-top: 4px; }
   .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 100; }
   .modal.open { display: flex; align-items: center; justify-content: center; }
   .modal-card { background: #fff; border-radius: 8px; padding: 16px; width: 480px; max-width: 92vw; box-shadow: 0 4px 20px rgba(0,0,0,.2); display: flex; flex-direction: column; }
@@ -40,6 +48,13 @@
 <body>
 <h1>🔍 敏感信息扫描工具</h1>
 
+<div class="tabs">
+  <button class="tab active" data-tab="scan" onclick="switchTab('scan')">扫描</button>
+  <button class="tab" data-tab="rules" onclick="switchTab('rules')">规则</button>
+</div>
+
+<!-- ===== 扫描页 ===== -->
+<div id="tab-scan" class="tab-panel">
 <div class="card">
   <div><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
     <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
@@ -50,14 +65,16 @@
     级别:
     <label><input type="checkbox" class="lvl" value="critical" checked>严重</label>
     <label><input type="checkbox" class="lvl" value="high" checked>高级</label>
-    <label><input type="checkbox" class="lvl" value="medium" checked>中级</label>
-    <label><input type="checkbox" class="lvl" value="low" checked>低级</label>
+    <label><input type="checkbox" class="lvl" value="medium">中级</label>
+    <label><input type="checkbox" class="lvl" value="low">低级</label>
   </div>
+  <div class="muted" style="margin-top:6px">💡 扫描大批量文件（尤其是日志或软件安装目录）时，建议只勾「严重」「高级」——日志里的 IP/URL/手机号等会产生大量误报。</div>
   <div style="margin-top:10px">
     <button id="btnScan" onclick="startScan()">开始扫描</button>
     <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
     <button class="ghost" onclick="exportReport('text')">导出 Text</button>
     <button class="ghost" onclick="exportReport('json')">导出 JSON</button>
+    <button class="ghost" onclick="exitApp()" style="float:right">退出程序</button>
   </div>
 </div>
 
@@ -67,7 +84,6 @@
 </div>
 
 <div class="card">
-  <!-- 扫描后的结果过滤：级别 / 类型 / 关键字，纯前端筛选不重扫 -->
   <div class="toolbar">
     级别:
     <label><input type="radio" name="flevel" value="all" checked>全部</label>
@@ -75,7 +91,13 @@
     <label><input type="radio" name="flevel" value="high">高级</label>
     <label><input type="radio" name="flevel" value="medium">中级</label>
     <label><input type="radio" name="flevel" value="low">低级</label>
-    类型:<select id="ftype"><option value="all">全部</option></select>
+    类型:<select id="ftype">
+      <option value="all">全部</option>
+      <option>私钥</option><option>API密钥</option><option>数据库连接字符串</option>
+      <option>身份证号</option><option>银行卡号</option><option>密码</option><option>JWT令牌</option>
+      <option>手机号码</option><option>邮箱地址</option><option>IP地址</option>
+      <option>用户名</option><option>URL地址</option><option>内部服务器路径</option>
+    </select>
     搜索:<input type="text" id="fsearch" size="22" placeholder="文件名 / 内容 / 匹配">
     <span id="fcount" class="muted"></span>
   </div>
@@ -85,10 +107,22 @@
   </table>
   <div class="pager" id="pager"></div>
 </div>
+</div>
+
+<!-- ===== 规则页 ===== -->
+<div id="tab-rules" class="tab-panel" style="display:none">
+  <div class="card">
+    <div style="margin-bottom:10px">
+      <b>敏感信息规则库</b>
+      <span class="muted">查看当前内置的正则规则（按级别分组）；规则的增删改查功能规划中。</span>
+    </div>
+    <div id="rulesList"><div class="muted">加载中…</div></div>
+  </div>
+</div>
 
 <div style="text-align:center;color:#999;font-size:13px;padding:8px 0 4px">powered by cz</div>
 
-<!-- 目录选择弹层：懒加载子目录，点「选择此目录」回填绝对路径到 #path -->
+<!-- 目录选择弹层 -->
 <div id="browser" class="modal">
   <div class="modal-card">
     <div class="modal-title">选择目录
@@ -105,22 +139,73 @@
 
 <script>
 const lvName = {critical:'严重', high:'高级', medium:'中级', low:'低级'};
-const PAGE_SIZE = 200; // 每页渲染条数，避免大结果集一次性 innerHTML 卡顿
+const lvColor = {critical:'#e74c3c', high:'#e67e22', medium:'#b7950b', low:'#3498db'};
+const PAGE_SIZE = 200;
 
 let scanning = false;
-let allResults = [];   // 后端返回的全量结果，筛选/分页都基于此（不重扫）
-let pollCount = 0;
-// 当前筛选条件
+let pageResults = [];
+let total = 0;
+let curPage = 1;
 let filterLevel = 'all';
 let filterType = 'all';
 let filterKeyword = '';
-let curPage = 1;
+let rulesLoaded = false;
 
-// 绑定筛选事件：任一条件变化都回到第 1 页重渲染
+// ===== Tab 切换 =====
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.style.display = 'none');
+  const panel = document.getElementById('tab-' + name);
+  if (panel) panel.style.display = '';
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  if (name === 'rules' && !rulesLoaded) loadRules();
+}
+
+// ===== 规则页 =====
+async function loadRules() {
+  const el = document.getElementById('rulesList');
+  el.innerHTML = '<div class="muted">加载中…</div>';
+  try {
+    const r = await (await fetch('/api/patterns')).json();
+    renderRules(r.patterns || []);
+    rulesLoaded = true;
+  } catch (e) {
+    el.innerHTML = '<div class="muted">加载失败: ' + escapeHtml(String(e)) + '</div>';
+  }
+}
+
+function renderRules(patterns) {
+  const order = ['critical', 'high', 'medium', 'low'];
+  const byLevel = {};
+  for (const p of patterns) (byLevel[p.level] = byLevel[p.level] || []).push(p);
+  const el = document.getElementById('rulesList');
+  let html = `<div class="muted">共 ${patterns.length} 条规则，按级别分组如下：</div>`;
+  for (const lv of order) {
+    const items = byLevel[lv] || [];
+    if (!items.length) continue;
+    html += `<div class="rule-level-title" style="color:${lvColor[lv]}">【${lvName[lv]}】${items.length} 条</div>`;
+    for (const p of items) {
+      const examples = (p.examples || []).map(e => escapeHtml(e)).join(' &nbsp;·&nbsp; ');
+      html += `<div class="rule-card" style="border-left-color:${lvColor[lv]}">` +
+        `<div><b>${escapeHtml(p.name)}</b>${p.cross_line ? ' <span class="muted">（跨行匹配）</span>' : ''}</div>` +
+        (p.description ? `<div class="muted">${escapeHtml(p.description)}</div>` : '') +
+        `<div class="rule-regex">${escapeHtml(p.pattern)}</div>` +
+        (examples ? `<div class="rule-example">示例：${examples}</div>` : '') +
+        `</div>`;
+    }
+  }
+  el.innerHTML = html || '<div class="muted">无规则</div>';
+}
+
+// ===== 扫描页筛选事件 =====
 document.querySelectorAll('input[name=flevel]').forEach(r =>
-  r.addEventListener('change', () => { filterLevel = r.value; curPage = 1; renderResults(); }));
-document.getElementById('ftype').addEventListener('change', e => { filterType = e.target.value; curPage = 1; renderResults(); });
-document.getElementById('fsearch').addEventListener('input', e => { filterKeyword = e.target.value.trim(); curPage = 1; renderResults(); });
+  r.addEventListener('change', () => { filterLevel = r.value; loadPage(1); }));
+document.getElementById('ftype').addEventListener('change', e => { filterType = e.target.value; loadPage(1); });
+let searchTimer = null;
+document.getElementById('fsearch').addEventListener('input', e => {
+  filterKeyword = e.target.value.trim();
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => loadPage(1), 300);
+});
 
 async function startScan() {
   const path = document.getElementById('path').value.trim();
@@ -136,9 +221,7 @@ async function startScan() {
   const res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) { document.getElementById('btnScan').disabled = false; alert(await res.text()); return; }
   scanning = true;
-  pollCount = 0;
-  allResults = [];
-  curPage = 1;
+  pageResults = []; total = 0; curPage = 1;
   renderResults();
   document.getElementById('btnStop').disabled = false;
   poll();
@@ -146,77 +229,56 @@ async function startScan() {
 
 function stopScan() { fetch('/api/stop', {method:'POST'}); }
 
+function exitApp() {
+  if (!confirm('确定退出程序？退出后需重新运行才能再次使用。')) return;
+  fetch('/api/exit', {method:'POST'}).catch(()=>{}).finally(()=>{
+    document.body.innerHTML = '<div style="text-align:center;padding:60px;color:#888;font-size:15px">程序已退出，可关闭此页面。<br><span class="muted">如需再次使用，请重新运行程序。</span></div>';
+  });
+}
+
 async function poll() {
   if (!scanning) return;
   try {
     const r = await (await fetch('/api/progress')).json();
     document.getElementById('bar').style.width = r.progress + '%';
+    const trunc = r.stats && r.stats.truncated_count > 0
+      ? ` <span class="warn">（已截断 ${r.stats.truncated_count} 条，仅保留高优先级）</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
-      `<span>已扫描: ${r.stats.scanned_files}/${r.stats.total_files}</span><span>问题: ${r.stats.total_issues}</span>`;
-    // 扫描中每 ~1s（每 3 次 poll）增量拉一次结果实时刷新表格；后端 Results() 并发安全
-    pollCount++;
-    if (pollCount % 3 === 0) {
-      await loadResults();
-    }
+      `<span>已扫描: ${r.scanned}/${r.total||'?'}</span><span>问题: ${r.stats.total_issues}</span>${trunc}`;
     if (!r.scanning) {
       scanning = false;
       document.getElementById('btnScan').disabled = false;
       document.getElementById('btnStop').disabled = true;
-      await loadResults();
-      if (allResults.length === 0) {
-        document.getElementById('stats').innerHTML += ' — 未发现敏感信息';
-      }
+      await loadPage(1);
       return;
     }
   } catch(e) {}
-  setTimeout(poll, 300);
+  setTimeout(poll, 500);
 }
 
-// 拉取全量结果并按当前筛选渲染（不改筛选条件，扫描中增量调用安全）
-async function loadResults() {
-  const r = await (await fetch('/api/results')).json();
-  allResults = r.results || [];
-  refreshTypeOptions();
+async function loadPage(page) {
+  curPage = page;
+  const params = new URLSearchParams();
+  params.set('offset', String((page - 1) * PAGE_SIZE));
+  params.set('limit', String(PAGE_SIZE));
+  if (filterLevel !== 'all') params.set('level', filterLevel);
+  if (filterType !== 'all') params.set('type', filterType);
+  if (filterKeyword) params.set('kw', filterKeyword);
+  try {
+    const r = await (await fetch('/api/results?' + params.toString())).json();
+    pageResults = r.results || [];
+    total = r.total || 0;
+  } catch (e) {
+    pageResults = []; total = 0;
+  }
   renderResults();
 }
 
-// 类型下拉按当前结果动态填充（去重 + 保留已选值）
-function refreshTypeOptions() {
-  const sel = document.getElementById('ftype');
-  const types = [...new Set(allResults.map(r => r.pattern_name))].sort();
-  const keep = filterType;
-  sel.innerHTML = '<option value="all">全部</option>' + types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
-  filterType = [...sel.options].some(o => o.value === keep) ? keep : 'all';
-  sel.value = filterType;
-}
-
-function getFiltered() {
-  const kw = filterKeyword.toLowerCase();
-  return allResults.filter(it => {
-    if (filterLevel !== 'all' && it.level !== filterLevel) return false;
-    if (filterType !== 'all' && it.pattern_name !== filterType) return false;
-    if (kw) {
-      const hay = ((it.file_path||'') + ' ' + (it.matched_text||'') + ' ' + (it.line_content||'')).toLowerCase();
-      if (!hay.includes(kw)) return false;
-    }
-    return true;
-  });
-}
-
-// 分页 + DocumentFragment 批量插入，避免几千条一次性 innerHTML 卡顿
 function renderResults() {
-  const filtered = getFiltered();
-  const total = filtered.length;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-  if (curPage > pages) curPage = pages;
-  if (curPage < 1) curPage = 1;
-  const start = (curPage - 1) * PAGE_SIZE;
-  const slice = filtered.slice(start, start + PAGE_SIZE);
-
   const tbody = document.getElementById('results');
   const frag = document.createDocumentFragment();
-  for (const it of slice) {
+  for (const it of pageResults) {
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td class="lv-${it.level}">${lvName[it.level]||it.level}</td>` +
@@ -229,33 +291,26 @@ function renderResults() {
   tbody.innerHTML = '';
   tbody.appendChild(frag);
 
-  document.getElementById('fcount').textContent = `当前 ${total} / 共 ${allResults.length} 条`;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (curPage > pages) curPage = pages;
+  document.getElementById('fcount').textContent = `共 ${total} 条`;
 
   const pager = document.getElementById('pager');
   if (total === 0) {
-    pager.innerHTML = '<span class="muted">无匹配结果</span>';
+    pager.innerHTML = scanning ? '<span class="muted">扫描进行中，完成后显示结果…</span>' : '<span class="muted">无匹配结果</span>';
     return;
   }
   pager.innerHTML =
     `<span>第 ${curPage} / ${pages} 页</span>` +
-    `<button class="sm" onclick="goPage(${curPage-1})" ${curPage<=1?'disabled':''}>上一页</button>` +
-    `<button class="sm" onclick="goPage(${curPage+1})" ${curPage>=pages?'disabled':''}>下一页</button>`;
+    `<button class="sm" onclick="loadPage(${curPage-1})" ${curPage<=1?'disabled':''}>上一页</button>` +
+    `<button class="sm" onclick="loadPage(${curPage+1})" ${curPage>=pages?'disabled':''}>下一页</button>`;
 }
 
-function goPage(p) { curPage = p; renderResults(); }
-
-function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
-function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
-function escapeHtml(s) {
-  return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-}
-
-// ===== 目录选择器（懒加载子目录，回填绝对路径到 #path）=====
+// ===== 目录选择器 =====
 let browserCurPath = '';
 
 async function openBrowser() {
   document.getElementById('browser').classList.add('open');
-  // 从路径框当前值起始，便于就近浏览；为空则从根入口（盘符 / 根目录）开始
   browserCurPath = document.getElementById('path').value.trim();
   await loadBrowser();
 }
@@ -276,7 +331,6 @@ async function loadBrowser() {
   }
   document.getElementById('browserPath').textContent = r.path || '（选择起始位置）';
   list.innerHTML = '';
-  // 返回上级（error 状态下也保留，便于退出）
   if (r.parent) {
     const up = document.createElement('div');
     up.className = 'browser-item';
@@ -296,7 +350,7 @@ async function loadBrowser() {
     div.className = 'browser-item';
     div.textContent = '📁 ' + e.name;
     div.onclick = () => { browserCurPath = e.path; loadBrowser(); };
-    div.ondblclick = () => { browserCurPath = e.path; pickDir(); }; // 双击直接选中
+    div.ondblclick = () => { browserCurPath = e.path; pickDir(); };
     list.appendChild(div);
   }
   if (!r.error && dirs.length === 0) {
@@ -312,6 +366,12 @@ function pickDir() {
     document.getElementById('path').value = browserCurPath;
   }
   closeBrowser();
+}
+
+function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
+function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
+function escapeHtml(s) {
+  return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 </script>
 </body>

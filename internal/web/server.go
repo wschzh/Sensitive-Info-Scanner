@@ -12,9 +12,11 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
+	"sensitivescanner/internal/patterns"
 	"sensitivescanner/internal/report"
 	"sensitivescanner/internal/scanner"
 	"sensitivescanner/internal/types"
@@ -28,11 +30,26 @@ type Server struct {
 	mu       sync.Mutex
 	scanner  *scanner.Scanner
 	scanning bool
+	done     chan struct{}
 }
 
 // NewServer 创建服务（初始扫描器为默认配置）。
 func NewServer() *Server {
-	return &Server{scanner: scanner.New(scanner.Config{})}
+	return &Server{scanner: scanner.New(scanner.Config{}), done: make(chan struct{})}
+}
+
+// Done 返回退出信号通道（/api/exit 触发后关闭，供主流程等待退出）。
+func (s *Server) Done() <-chan struct{} { return s.done }
+
+// Shutdown 触发主流程退出（幂等，可安全多次调用）。
+func (s *Server) Shutdown() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	select {
+	case <-s.done:
+	default:
+		close(s.done)
+	}
 }
 
 // Start 在 127.0.0.1 随机端口启动 HTTP 服务，返回监听地址。
@@ -52,9 +69,12 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/scan", s.handleScan)
 	mux.HandleFunc("/api/progress", s.handleProgress)
 	mux.HandleFunc("/api/results", s.handleResults)
+	mux.HandleFunc("/api/results/since", s.handleResultsSince)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/browse", s.handleBrowse)
+	mux.HandleFunc("/api/exit", s.handleExit)
+	mux.HandleFunc("/api/patterns", s.handlePatterns)
 	return mux
 }
 
@@ -64,10 +84,12 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 }
 
 type scanRequest struct {
-	Path      string        `json:"path"`
-	Recursive bool          `json:"recursive"`
-	MaxSize   int64         `json:"max_size"`
-	Levels    []types.Level `json:"levels"`
+	Path       string        `json:"path"`
+	Recursive  bool          `json:"recursive"`
+	MaxSize    int64         `json:"max_size"`
+	Levels     []types.Level `json:"levels"`
+	Workers    int           `json:"workers"`
+	MaxResults int           `json:"max_results"`
 }
 
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
@@ -95,7 +117,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "已有扫描在进行", http.StatusConflict)
 		return
 	}
-	s.scanner = scanner.New(scanner.Config{MaxFileSize: req.MaxSize, ScanLevels: req.Levels})
+	s.scanner = scanner.New(scanner.Config{
+		MaxFileSize: req.MaxSize,
+		ScanLevels:  req.Levels,
+		Workers:     req.Workers,
+		MaxResults:  req.MaxResults,
+	})
 	s.scanning = true
 	s.mu.Unlock()
 
@@ -117,20 +144,46 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	scanning := s.scanning
 	s.mu.Unlock()
-	progress, current := s.scanner.Progress()
+	scanned, total, current := s.scanner.Progress()
 	stats := s.scanner.Stats()
+	pct := 0
+	if total > 0 {
+		pct = scanned * 100 / total
+	}
 	writeJSON(w, map[string]any{
-		"progress":     progress,
+		"progress":     pct,     // 兼容旧前端百分比
+		"scanned":      scanned, // 已扫描文件数
+		"total":        total,   // 已发现文件数（扫描中实时增长）
 		"current_file": current,
 		"scanning":     scanning,
-		"stats":        stats,
+		"stats":        stats, // 含 truncated_count / truncated_by_level
 	})
 }
 
 func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	f := scanner.ResultFilter{
+		Level:   types.Level(q.Get("level")),
+		Type:    q.Get("type"),
+		Keyword: q.Get("kw"),
+	}
+	items, total := s.scanner.ResultsPage(offset, limit, f)
 	writeJSON(w, map[string]any{
-		"results": s.scanner.Results(),
+		"results": items,
+		"total":   total,
 		"stats":   s.scanner.Stats(),
+	})
+}
+
+// handleResultsSince 增量返回序号 seq 之后的新结果（扫描中轮询用，避免拉全量）。
+func (s *Server) handleResultsSince(w http.ResponseWriter, r *http.Request) {
+	seq, _ := strconv.Atoi(r.URL.Query().Get("seq"))
+	items, nextSeq := s.scanner.ResultsSince(seq)
+	writeJSON(w, map[string]any{
+		"results":  items,
+		"next_seq": nextSeq,
 	})
 }
 
@@ -139,28 +192,63 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusOK)
 }
 
+// handleExit 退出整个程序（解决 Windows GUI 关闭浏览器后进程残留、无法删除 exe 的问题）。
+func (s *Server) handleExit(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "仅支持 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+	go func() {
+		time.Sleep(150 * time.Millisecond) // 等响应写完再退出
+		s.Shutdown()
+	}()
+}
+
+// handlePatterns 返回当前内置的正则规则（供前端规则页展示，为后续增删改查铺路）。
+func (s *Server) handlePatterns(w http.ResponseWriter, r *http.Request) {
+	type patternInfo struct {
+		Name        string      `json:"name"`
+		Pattern     string      `json:"pattern"`
+		Level       types.Level `json:"level"`
+		Description string      `json:"description"`
+		Examples    []string    `json:"examples"`
+		CrossLine   bool        `json:"cross_line"`
+	}
+	all := patterns.All()
+	out := make([]patternInfo, len(all))
+	for i, p := range all {
+		out[i] = patternInfo{
+			Name:        p.Name,
+			Pattern:     p.Pattern,
+			Level:       p.Level,
+			Description: p.Description,
+			Examples:    p.Examples,
+			CrossLine:   p.CrossLine,
+		}
+	}
+	writeJSON(w, map[string]any{"patterns": out})
+}
+
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	format := report.Text
 	if r.URL.Query().Get("format") == "json" {
 		format = report.JSON
 	}
-	content, _ := report.Generate(s.scanner, format, "")
-
-	// text 报告加 UTF-8 BOM，避免 Windows 记事本打开中文乱码；JSON 不加（BOM 会破坏解析）
-	body := []byte(content)
 	contentType := "text/plain; charset=utf-8"
 	ext := "txt"
-	if format == report.Text {
-		body = report.WithBOM(content)
-	} else {
+	if format == report.JSON {
 		contentType = "application/json; charset=utf-8"
 		ext = "json"
 	}
+	// Header 必须在写 body 前设好（流式输出后不能再改 Header）
 	w.Header().Set("Content-Type", contentType)
-	// 设固定文件名，避免浏览器下载名随机（如 "download"）
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("attachment; filename=scan-report-%s.%s", time.Now().Format("20060102"), ext))
-	_, _ = w.Write(body)
+	if format == report.Text {
+		_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM（text 格式，避免中文乱码）
+	}
+	_ = report.GenerateTo(s.scanner, format, w) // 流式写 HTTP 响应，不累积全量字符串
 }
 
 // handleBrowse 目录浏览：供前端目录选择器懒加载子目录。

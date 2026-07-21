@@ -63,6 +63,8 @@
   - **涉及**：`internal/scanner/scanner.go`、`internal/extract/ocr.go`、`main.go`、`internal/web/server.go`、`internal/web/index.html`
 
 ### 1.5 可直接在web页面查看检索的正则规则，并支持自定义新增、删除、修改等功能
+- **进度**：✅ 规则查看页已完成（「规则」tab + `/api/patterns`，按级别分组展示 13 条规则的名称/级别/正则/描述/示例/跨行标记）
+- **待办**：增删改查（需为 patterns 引入持久化层：JSON 配置文件加载 + 热更新，目前规则为编译期硬编码）
 
 ---
 
@@ -109,5 +111,6 @@
 - **方案**：评估是否要求路径后跟文件扩展名、或加常见日志 / 临时目录白名单；先收集误报样本再定。需与原 Python 版行为对齐确认。
 - **涉及**：`internal/patterns/patterns.go`
 
-### 2.9 win下关闭web窗口后，进程未结束
+### 2.9 win下关闭web窗口后，进程未结束 ✅
+- **方案**：Web 页面加「退出程序」按钮 → `POST /api/exit` → 主流程 `<-srv.Done()` 返回后退出，进程结束释放 exe（已实测优雅退出 exit 0）
 

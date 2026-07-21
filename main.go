@@ -45,6 +45,8 @@ func main() {
 	output := flag.String("o", "", "输出报告文件路径")
 	format := flag.String("f", "text", "报告格式 (text/json)")
 	maxSize := flag.Int("max-size", 10*1024*1024, "最大文件大小(字节)")
+	workers := flag.Int("workers", 0, "并发 worker 数(0=CPU 核数)")
+	maxResults := flag.Int("max-results", 100000, "内存保留结果上限")
 	var levels levelFlag
 	flag.Var(&levels, "level", "扫描级别(可多选: critical/high/medium/low)")
 	flag.Parse()
@@ -69,6 +71,8 @@ func main() {
 	s := scanner.New(scanner.Config{
 		MaxFileSize: int64(*maxSize),
 		ScanLevels:  levels.levels,
+		Workers:     *workers,
+		MaxResults:  *maxResults,
 	})
 
 	fmt.Printf("开始扫描: %s\n", path)
@@ -78,15 +82,17 @@ func main() {
 		s.ScanSingle(path)
 	}
 
-	content, err := report.Generate(s, report.Format(*format), *output)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "写报告失败: %v\n", err)
-	}
 	if *output == "" {
-		fmt.Println(content)
+		if err := report.GenerateTo(s, report.Format(*format), os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "生成报告失败: %v\n", err)
+		}
 	} else {
-		stats := s.Stats()
-		fmt.Printf("完成: 扫描 %d 个文件，发现 %d 个敏感信息，报告已保存到 %s\n",
-			stats.ScannedFiles, stats.TotalIssues, *output)
+		if err := report.GenerateToFile(s, report.Format(*format), *output); err != nil {
+			fmt.Fprintf(os.Stderr, "写报告失败: %v\n", err)
+		} else {
+			stats := s.Stats()
+			fmt.Printf("完成: 扫描 %d 个文件，发现 %d 个敏感信息，报告已保存到 %s\n",
+				stats.ScannedFiles, stats.TotalIssues, *output)
+		}
 	}
 }

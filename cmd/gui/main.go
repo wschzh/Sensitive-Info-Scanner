@@ -28,6 +28,6 @@ func main() {
 		fmt.Println("浏览器未自动打开，请手动访问:", url)
 	}
 
-	// 阻塞主 goroutine，保持服务运行
-	select {}
+	// 阻塞直到 /api/exit（Web 页面「退出程序」按钮）触发；退出后进程结束，Windows 下可正常删除 exe
+	<-srv.Done()
 }

@@ -19,6 +19,7 @@ type Pattern struct {
 	Level       types.Level
 	Description string
 	Examples    []string
+	CrossLine   bool // 是否需要跨行匹配（如私钥 -----BEGIN...END-----）
 	re          *regexp.Regexp
 }
 
@@ -33,6 +34,7 @@ var all = compileAll([]Pattern{
 		Level:       types.Critical,
 		Pattern:     `(?i)-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----[\s\S]+?-----END\s+(RSA\s+)?PRIVATE\s+KEY-----`,
 		Description: "RSA私钥或其他加密私钥",
+		CrossLine:   true,
 		Examples: []string{
 			"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAbGcexample\n-----END RSA PRIVATE KEY-----",
 		},
@@ -99,9 +101,9 @@ var all = compileAll([]Pattern{
 	},
 	{
 		Name:        "IP地址",
-		Level:       types.Medium,
+		Level:       types.Low,
 		Pattern:     `\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b`,
-		Description: "IPv4地址",
+		Description: "IPv4地址（日志/代码中多为误报，已降为低级）",
 		Examples:    []string{"192.168.1.1"},
 	},
 
@@ -166,6 +168,18 @@ func FindByName(name string) *Pattern {
 	return nil
 }
 
+// SplitCrossLine 把模式集拆为单行与跨行两组，供扫描器分流匹配（跨行整段、单行逐行）。
+func SplitCrossLine(ps []Pattern) (single, cross []Pattern) {
+	for _, p := range ps {
+		if p.CrossLine {
+			cross = append(cross, p)
+		} else {
+			single = append(single, p)
+		}
+	}
+	return single, cross
+}
+
 // FileCategories 文件扩展名分类（迁移自原 FILE_CATEGORIES，去重）。
 var FileCategories = map[string][]string{
 	"code":     {".py", ".js", ".java", ".c", ".cpp", ".cs", ".php", ".rb", ".go", ".rs", ".swift", ".kt", ".scala", ".sh", ".bat", ".ps1"},
@@ -194,6 +208,7 @@ func IsScannableExt(ext string) bool { return scannableExt[ext] }
 var ExcludeDirs = []string{
 	".git", ".svn", ".hg", "node_modules", "__pycache__",
 	".vscode", ".idea", "bin", "obj", "dist", "build", "temp", "tmp",
+	"System Volume Information", "$Recycle.Bin",
 }
 
 // excludeDirSet 排除目录名集合。
