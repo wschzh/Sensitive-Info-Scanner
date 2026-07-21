@@ -89,9 +89,21 @@ type Scanner struct {
 
 	pmu     sync.Mutex // 保护 current
 	current string
+	active  map[int]activeFile
 
 	scanned    atomic.Int64 // 已完成扫描的文件数
 	discovered atomic.Int64 // walker 已发现的文件数（扫描中实时增长）
+}
+
+type activeFile struct {
+	Path    string
+	Started time.Time
+}
+
+type ActiveFile struct {
+	Worker  int    `json:"worker"`
+	Path    string `json:"path"`
+	Seconds int    `json:"seconds"`
 }
 
 // New 创建扫描器。
@@ -108,6 +120,7 @@ func New(cfg Config) *Scanner {
 		single:   single,
 		cross:    cross,
 		stats:    types.NewScanStatistics(),
+		active:   map[int]activeFile{},
 	}
 }
 
@@ -283,6 +296,31 @@ func (s *Scanner) Progress() (scanned, total int, current string) {
 	return int(s.scanned.Load()), int(s.discovered.Load()), current
 }
 
+// ActiveFiles 返回当前 worker 正在处理的文件和持续时间。
+func (s *Scanner) ActiveFiles() []ActiveFile {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	now := time.Now()
+	out := make([]ActiveFile, 0, len(s.active))
+	for worker, f := range s.active {
+		if f.Path == "" {
+			continue
+		}
+		out = append(out, ActiveFile{
+			Worker:  worker,
+			Path:    f.Path,
+			Seconds: int(now.Sub(f.Started).Seconds()),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Seconds == out[j].Seconds {
+			return out[i].Worker < out[j].Worker
+		}
+		return out[i].Seconds > out[j].Seconds
+	})
+	return out
+}
+
 // Stop 请求停止扫描（取消当前扫描的 context，worker/walker 随即退出）。
 func (s *Scanner) Stop() {
 	s.mu.Lock()
@@ -302,6 +340,7 @@ func (s *Scanner) reset() {
 	s.discovered.Store(0)
 	s.pmu.Lock()
 	s.current = ""
+	s.active = map[int]activeFile{}
 	s.pmu.Unlock()
 }
 
@@ -401,7 +440,7 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 	var wg sync.WaitGroup
 	for i := 0; i < s.cfg.Workers; i++ {
 		wg.Add(1)
-		go s.scanWorker(ctx, fileCh, resultCh, &wg)
+		go s.scanWorker(ctx, i+1, fileCh, resultCh, &wg)
 	}
 	// closer：所有 worker 退出后关闭 resultCh
 	go func() {
@@ -453,7 +492,7 @@ func (s *Scanner) scanFileTimeout(ctx context.Context, path string) []types.Scan
 	}
 }
 
-func (s *Scanner) scanWorker(ctx context.Context, fileCh <-chan string, resultCh chan<- []types.ScanResult, wg *sync.WaitGroup) {
+func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, resultCh chan<- []types.ScanResult, wg *sync.WaitGroup) {
 	defer wg.Done()
 	for {
 		select {
@@ -465,8 +504,12 @@ func (s *Scanner) scanWorker(ctx context.Context, fileCh <-chan string, resultCh
 			}
 			s.pmu.Lock()
 			s.current = path
+			s.active[id] = activeFile{Path: path, Started: time.Now()}
 			s.pmu.Unlock()
 			fr := s.scanFileTimeout(ctx, path)
+			s.pmu.Lock()
+			delete(s.active, id)
+			s.pmu.Unlock()
 			select {
 			case resultCh <- fr:
 			case <-ctx.Done():
@@ -591,6 +634,10 @@ func isMinified(content string) bool {
 func (s *Scanner) readFile(path string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if patterns.IsExcludedFileName(filepath.Base(path)) || !patterns.IsScannableExt(ext) {
+		return "", false
+	}
+	if s.cfg.ScanProfile == ProfileFullDiskFast && ext == ".doc" {
+		s.addSkipped(false, skipProfileDisabled)
 		return "", false
 	}
 	if fi, err := os.Stat(path); err == nil {
@@ -784,6 +831,9 @@ func (s *Scanner) shouldScan(path string) (bool, string) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if patterns.IsExcludedFileName(filepath.Base(path)) {
 		return false, skipExcludedExt
+	}
+	if s.cfg.ScanProfile == ProfileFullDiskFast && ext == ".doc" {
+		return false, skipProfileDisabled
 	}
 	if !patterns.IsScannableExt(ext) {
 		return false, skipUnsupportedExt

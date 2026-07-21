@@ -277,8 +277,11 @@ async function poll() {
       lastProgressChangeAt = Date.now();
     }
     const stallSec = Math.floor((Date.now() - lastProgressChangeAt) / 1000);
+    const active = (r.active_files || []).slice(0, 3)
+      .map(f => `#${f.worker} ${f.seconds}s ${escapeHtml(shortPath(f.path || ''))}`)
+      .join('；');
     const stall = stallSec >= 15
-      ? `<span class="warn">已 ${stallSec}s 无新增，可能正在处理大文件或受权限/磁盘 IO 影响</span>` : '';
+      ? `<span class="warn">已 ${stallSec}s 无新增，活跃文件：${active || '无'}</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +

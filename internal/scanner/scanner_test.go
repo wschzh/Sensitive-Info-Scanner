@@ -303,6 +303,23 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	}
 }
 
+func TestFullDiskFastSkipsLegacyDoc(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "legacy.doc")
+	if err := os.WriteFile(path, []byte("api_key: should_skip_1234567890"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{ScanProfile: ProfileFullDiskFast})
+	s.ScanSingle(path)
+	stats := s.Stats()
+	if stats.ScannedFiles != 0 {
+		t.Fatalf("legacy .doc should be skipped in full_disk_fast, scanned=%d", stats.ScannedFiles)
+	}
+	if stats.SkippedByReason[skipProfileDisabled] != 1 {
+		t.Fatalf("profile disabled skips=%d want 1", stats.SkippedByReason[skipProfileDisabled])
+	}
+}
+
 func TestPatternHintsDoNotSkipMatches(t *testing.T) {
 	s := New(Config{})
 	content := strings.Join([]string{

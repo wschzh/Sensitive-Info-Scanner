@@ -198,6 +198,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		"scanned":      scanned, // 已扫描文件数
 		"total":        total,   // 已发现文件数（扫描中实时增长）
 		"current_file": current,
+		"active_files": sc.ActiveFiles(),
 		"scanning":     scanning,
 		"stats":        stats, // 含 truncated_count / truncated_by_level
 	})
