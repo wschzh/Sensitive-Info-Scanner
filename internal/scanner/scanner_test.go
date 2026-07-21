@@ -339,8 +339,15 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if s.cfg.MaxTextSize != fullDiskMaxTextSize {
 		t.Fatalf("full_disk_fast MaxTextSize=%d want %d", s.cfg.MaxTextSize, fullDiskMaxTextSize)
 	}
-	if s.cfg.MaxRichFileSize != fullDiskMaxRichSize {
-		t.Fatalf("full_disk_fast MaxRichFileSize=%d want %d", s.cfg.MaxRichFileSize, fullDiskMaxRichSize)
+	if s.cfg.MaxRichFileSize != s.cfg.MaxFileSize {
+		t.Fatalf("full_disk_fast MaxRichFileSize=%d want MaxFileSize %d", s.cfg.MaxRichFileSize, s.cfg.MaxFileSize)
+	}
+}
+
+func TestRichDocumentLimitFollowsMaxFileSize(t *testing.T) {
+	s := New(Config{MaxFileSize: 12 * 1024 * 1024})
+	if s.cfg.MaxRichFileSize != s.cfg.MaxFileSize {
+		t.Fatalf("MaxRichFileSize=%d want MaxFileSize %d", s.cfg.MaxRichFileSize, s.cfg.MaxFileSize)
 	}
 }
 

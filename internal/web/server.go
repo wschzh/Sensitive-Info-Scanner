@@ -164,24 +164,21 @@ func scanConfig(req scanRequest, paths []string) scanner.Config {
 	workers := req.Workers
 	timeout := time.Duration(0)
 	maxTextSize := 0
-	maxRichSize := int64(0)
 	if isBroadRootScan(paths) {
 		profile = scanner.ProfileFullDiskFast
 		workers = 4
 		timeout = 30 * time.Second
 		maxTextSize = 4 * 1024 * 1024
-		maxRichSize = 10 * 1024 * 1024
 	}
 	return scanner.Config{
-		MaxFileSize:     req.MaxSize,
-		ScanLevels:      req.Levels,
-		Workers:         workers,
-		MaxResults:      req.MaxResults,
-		ScanProfile:     profile,
-		WalkEngine:      req.WalkEngine,
-		PerFileTimeout:  timeout,
-		MaxTextSize:     maxTextSize,
-		MaxRichFileSize: maxRichSize,
+		MaxFileSize:    req.MaxSize,
+		ScanLevels:     req.Levels,
+		Workers:        workers,
+		MaxResults:     req.MaxResults,
+		ScanProfile:    profile,
+		WalkEngine:     req.WalkEngine,
+		PerFileTimeout: timeout,
+		MaxTextSize:    maxTextSize,
 	}
 }
 
