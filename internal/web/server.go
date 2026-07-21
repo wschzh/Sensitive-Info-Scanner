@@ -170,7 +170,7 @@ func scanConfig(req scanRequest, paths []string) scanner.Config {
 		workers = 4
 		timeout = 30 * time.Second
 		maxTextSize = 4 * 1024 * 1024
-		maxRichSize = 2 * 1024 * 1024
+		maxRichSize = 10 * 1024 * 1024
 	}
 	return scanner.Config{
 		MaxFileSize:     req.MaxSize,

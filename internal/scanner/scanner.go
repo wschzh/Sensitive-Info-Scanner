@@ -26,7 +26,7 @@ const (
 	defaultMaxFileSize    int64 = 10 * 1024 * 1024
 	defaultMaxTextSize    int   = 50 * 1024 * 1024
 	fullDiskMaxTextSize         = 8 * 1024 * 1024
-	fullDiskMaxRichSize   int64 = 2 * 1024 * 1024
+	fullDiskMaxRichSize   int64 = 10 * 1024 * 1024
 	defaultMaxResults           = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
 	maxWorkers                  = 64
 	maxRecentEvents             = 80
@@ -83,7 +83,7 @@ type Config struct {
 	DisableImages       bool          // 跳过图片/OCR 慢路径
 	PerFileTimeout      time.Duration // 单文件超时，0 = 默认 120s；full_disk_fast 默认 30s
 	MaxTextSize         int           // 提取后文本上限（字节），0 = 默认 50MB；full_disk_fast 默认 8MB
-	MaxRichFileSize     int64         // Office/PDF 富文档原文件上限，0 = 不单独限制；full_disk_fast 默认 2MB
+	MaxRichFileSize     int64         // Office/PDF 富文档原文件上限，0 = 不单独限制；full_disk_fast 默认 10MB
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。

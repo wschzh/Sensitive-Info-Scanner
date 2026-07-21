@@ -320,9 +320,9 @@ function applyProfilePreset() {
     levels.forEach(e => e.checked = e.value === 'critical' || e.value === 'high');
     document.getElementById('walkEngine').value = 'fastwalk';
     document.getElementById('maxsize').value = 10;
-    document.getElementById('scanHint').textContent = '全盘快速会自动扫描所有可访问盘符，只检查严重/高级问题，并使用快速遍历。';
+    document.getElementById('scanHint').textContent = '全盘快速会自动扫描所有可访问盘符，只检查严重/高级问题，并使用快速遍历；Office/PDF 等富文档按 10MB 上限保护。';
   } else {
-    document.getElementById('scanHint').textContent = '自定义扫描需要选择路径，可调整扫描速度和级别；默认只检查严重/高级问题。';
+    document.getElementById('scanHint').textContent = '自定义扫描需要选择路径，可调整扫描速度和级别；如选择盘符根目录，会自动套用全盘保护策略。';
   }
 }
 
