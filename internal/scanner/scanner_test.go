@@ -336,6 +336,9 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if s.cfg.Workers != wantWorkers {
 		t.Fatalf("full_disk_fast workers=%d want %d", s.cfg.Workers, wantWorkers)
 	}
+	if s.cfg.MaxTextSize != fullDiskMaxTextSize {
+		t.Fatalf("full_disk_fast MaxTextSize=%d want %d", s.cfg.MaxTextSize, fullDiskMaxTextSize)
+	}
 }
 
 func TestPatternHintsDoNotSkipMatches(t *testing.T) {
@@ -398,6 +401,21 @@ func TestNumericCandidateFilterSkipsImpossibleText(t *testing.T) {
 		case "手机号码", "身份证号", "银行卡号", "IP地址":
 			t.Fatalf("无足够数字文本不应命中数字规则，却命中 %s", r.PatternName)
 		}
+	}
+}
+
+func TestReadFileSkipsExtractedTextTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.txt")
+	if err := os.WriteFile(path, []byte("api_key: "+strings.Repeat("a", 64)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{MaxTextSize: 16})
+	if content, ok := s.readFile(path); ok || content != "" {
+		t.Fatalf("large extracted text should be skipped, ok=%v len=%d", ok, len(content))
+	}
+	if got := s.Stats().SkippedByReason[skipTextTooLarge]; got != 1 {
+		t.Fatalf("text_too_large skips=%d want 1", got)
 	}
 }
 

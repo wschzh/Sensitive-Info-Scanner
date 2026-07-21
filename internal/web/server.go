@@ -140,8 +140,11 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	s.scanning = true
 	s.mu.Unlock()
 
+	heartbeatDone := make(chan struct{})
+	go s.logScanWatchdog(sc, heartbeatDone)
 	go func() {
 		defer func() {
+			close(heartbeatDone)
 			if v := recover(); v != nil {
 				diag.Printf("web scan panic profile=%s paths=%q panic=%v", req.Profile, paths, v)
 			}
@@ -159,6 +162,32 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-done:
+			return
+		case <-ticker.C:
+			var mem runtime.MemStats
+			runtime.ReadMemStats(&mem)
+			scanned, total, current := sc.Progress()
+			stats := sc.Stats()
+			active := sc.ActiveFiles()
+			diag.Printf("watchdog scanned=%d total=%d current=%q active=%d heap_mb=%d sys_mb=%d goroutines=%d issues=%d skipped=%d",
+				scanned, total, current, len(active), mem.HeapAlloc/1024/1024, mem.Sys/1024/1024,
+				runtime.NumGoroutine(), stats.TotalIssues, stats.SkippedFiles+stats.SkippedDirs)
+			for i, f := range active {
+				if i >= 5 {
+					break
+				}
+				diag.Printf("watchdog active worker=%d seconds=%d path=%q", f.Worker, f.Seconds, f.Path)
+			}
+		}
+	}
 }
 
 func scanTargets(req scanRequest) ([]string, error) {

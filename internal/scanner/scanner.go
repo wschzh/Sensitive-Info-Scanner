@@ -24,6 +24,8 @@ import (
 
 const (
 	defaultMaxFileSize    int64 = 10 * 1024 * 1024
+	defaultMaxTextSize    int   = 50 * 1024 * 1024
+	fullDiskMaxTextSize         = 8 * 1024 * 1024
 	defaultMaxResults           = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
 	maxWorkers                  = 64
 	maxRecentEvents             = 80
@@ -56,6 +58,7 @@ const (
 	skipInaccessible    = "inaccessible"
 	skipTimeout         = "timeout"
 	skipTimeoutBacklog  = "timeout_backlog"
+	skipTextTooLarge    = "text_too_large"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -77,6 +80,7 @@ type Config struct {
 	ExcludePathKeywords []string      // 路径分段关键词排除，空 = 默认 log/logs/cache/temp/tmp
 	DisableImages       bool          // 跳过图片/OCR 慢路径
 	PerFileTimeout      time.Duration // 单文件超时，0 = 默认 120s；full_disk_fast 默认 30s
+	MaxTextSize         int           // 提取后文本上限（字节），0 = 默认 50MB；full_disk_fast 默认 8MB
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。
@@ -154,9 +158,15 @@ func normalizeConfig(cfg Config) Config {
 		if cfg.PerFileTimeout <= 0 {
 			cfg.PerFileTimeout = 30 * time.Second
 		}
+		if cfg.MaxTextSize <= 0 {
+			cfg.MaxTextSize = fullDiskMaxTextSize
+		}
 	}
 	if cfg.PerFileTimeout <= 0 {
 		cfg.PerFileTimeout = perFileTimeout
+	}
+	if cfg.MaxTextSize <= 0 {
+		cfg.MaxTextSize = defaultMaxTextSize
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = defaultMaxFileSize
@@ -731,27 +741,38 @@ func (s *Scanner) readFile(path string) (string, bool) {
 	switch ext {
 	case ".xlsx":
 		c, err := extract.XLSX(path)
-		return c, err == nil
+		return s.limitExtractedText(c, err)
 	case ".docx":
 		c, err := extract.DOCX(path)
-		return c, err == nil
+		return s.limitExtractedText(c, err)
 	case ".pdf":
 		c, err := extract.PDF(path)
-		return c, err == nil
+		return s.limitExtractedText(c, err)
 	case ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".gif", ".webp":
 		if s.cfg.DisableImages {
 			s.addSkipped(false, skipProfileDisabled)
 			return "", false
 		}
 		c, err := extract.Image(path)
-		return c, err == nil // 找不到 tesseract 时静默跳过
+		return s.limitExtractedText(c, err) // 找不到 tesseract 时静默跳过
 	default:
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			return "", false
 		}
-		return decodeText(raw), true
+		return s.limitExtractedText(decodeText(raw), nil)
 	}
+}
+
+func (s *Scanner) limitExtractedText(content string, err error) (string, bool) {
+	if err != nil || content == "" {
+		return "", false
+	}
+	if s.cfg.MaxTextSize > 0 && len(content) > s.cfg.MaxTextSize {
+		s.addSkipped(false, skipTextTooLarge)
+		return "", false
+	}
+	return content, true
 }
 
 // matchContent 匹配文本：单行模式对全文一次性匹配（比逐行 × N pattern 快得多，

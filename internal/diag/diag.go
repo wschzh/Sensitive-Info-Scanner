@@ -15,22 +15,26 @@ var (
 	logPath string
 )
 
-// LogPath returns the diagnostic log path, creating the parent directory when
-// possible. It falls back to the OS temp directory if the user cache directory
-// is unavailable.
+// LogPath returns the diagnostic log path next to the executable so Windows GUI
+// users can find it without digging through AppData. It falls back to the
+// working directory and then the OS temp directory if needed.
 func LogPath() string {
 	mu.Lock()
 	defer mu.Unlock()
 	if logPath != "" {
 		return logPath
 	}
-	base, err := os.UserCacheDir()
-	if err != nil || base == "" {
+	base := ""
+	if exe, err := os.Executable(); err == nil && exe != "" {
+		base = filepath.Dir(exe)
+	}
+	if base == "" {
+		base, _ = os.Getwd()
+	}
+	if base == "" {
 		base = os.TempDir()
 	}
-	dir := filepath.Join(base, "SensitiveInfoScanner")
-	_ = os.MkdirAll(dir, 0o755)
-	logPath = filepath.Join(dir, "scanner-debug.log")
+	logPath = filepath.Join(base, "scanner-debug.log")
 	return logPath
 }
 

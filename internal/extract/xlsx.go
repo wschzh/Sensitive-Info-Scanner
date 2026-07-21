@@ -12,7 +12,7 @@ import (
 // maxXLSXUncompressed xlsx 解压后大小上限（字节）。
 // xlsx 是 zip 压缩，压缩比可达 10-50x，scanner 层的 MaxFileSize 只拦压缩前大小、对它几乎无效；
 // 此处在 extract 层做二次保护：解压后超过该阈值则跳过，防止大表把内存撑爆。
-const maxXLSXUncompressed = 200 * 1024 * 1024 // 200MB
+const maxXLSXUncompressed = 50 * 1024 * 1024 // 50MB
 
 // XLSX 提取 xlsx 文件所有工作表的文本（单元格以 \t 分隔，对齐原 Python 实现）。
 // 用 f.Rows 流式逐行迭代替代 GetRows 全量物化（避免 [][]string 双重驻留），降低大表内存峰值。
