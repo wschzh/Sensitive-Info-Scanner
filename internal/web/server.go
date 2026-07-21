@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"sensitivescanner/internal/diag"
 	"sensitivescanner/internal/patterns"
 	"sensitivescanner/internal/report"
 	"sensitivescanner/internal/scanner"
@@ -140,6 +141,14 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if v := recover(); v != nil {
+				diag.Printf("web scan panic profile=%s paths=%q panic=%v", req.Profile, paths, v)
+			}
+			s.mu.Lock()
+			s.scanning = false
+			s.mu.Unlock()
+		}()
 		if len(paths) > 1 {
 			sc.ScanPaths(paths, true)
 		} else if fi, _ := os.Stat(paths[0]); fi.IsDir() {
@@ -147,9 +156,6 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		} else {
 			sc.ScanSingle(paths[0])
 		}
-		s.mu.Lock()
-		s.scanning = false
-		s.mu.Unlock()
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
@@ -202,6 +208,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		"recent_events": sc.RecentEvents(),
 		"scanning":      scanning,
 		"stats":         stats, // 含 truncated_count / truncated_by_level
+		"log_path":      diag.LogPath(),
 	})
 }
 

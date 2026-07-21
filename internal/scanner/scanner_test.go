@@ -329,6 +329,13 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if s.cfg.PerFileTimeout != 30*time.Second {
 		t.Fatalf("full_disk_fast PerFileTimeout=%s want 30s", s.cfg.PerFileTimeout)
 	}
+	wantWorkers := runtime.NumCPU()
+	if wantWorkers > 8 {
+		wantWorkers = 8
+	}
+	if s.cfg.Workers != wantWorkers {
+		t.Fatalf("full_disk_fast workers=%d want %d", s.cfg.Workers, wantWorkers)
+	}
 }
 
 func TestPatternHintsDoNotSkipMatches(t *testing.T) {

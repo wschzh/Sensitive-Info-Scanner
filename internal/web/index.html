@@ -168,6 +168,7 @@ let filterKeyword = '';
 let rulesLoaded = false;
 let lastResultRefresh = 0;
 let refreshingResults = false;
+let pendingManualPage = null;
 let lastScannedCount = 0;
 let lastProgressChangeAt = Date.now();
 applyProfilePreset();
@@ -281,7 +282,7 @@ async function poll() {
       .map(f => `#${f.worker} ${f.seconds}s ${escapeHtml(shortPath(f.path || ''))}`)
       .join('；');
     const recent = (r.recent_events || [])
-      .filter(e => e.event === 'timeout' || (e.event === 'done' && e.seconds >= 10))
+      .filter(e => e.event === 'timeout' || e.event === 'timeout_backlog' || (e.event === 'done' && e.seconds >= 10))
       .slice(-3)
       .map(e => `${eventName(e.event)} #${e.worker} ${e.seconds || 0}s ${escapeHtml(shortPath(e.path || ''))}`)
       .join('；');
@@ -291,11 +292,12 @@ async function poll() {
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
       `<span>已跳过: ${(r.stats.skipped_files||0)} 文件 / ${(r.stats.skipped_dirs||0)} 目录</span>` +
-      `<span>问题: ${r.stats.total_issues}</span>${trunc}${stall}`;
+      `<span>问题: ${r.stats.total_issues}</span>` +
+      `<span class="muted">日志: ${escapeHtml(r.log_path || '')}</span>${trunc}${stall}`;
     const now = Date.now();
     if (now - lastResultRefresh > 1000) {
       lastResultRefresh = now;
-      loadPageWithOptions(curPage, {preserveOnError: true});
+      loadPageWithOptions(curPage, {preserveOnError: true, preserveDuringScan: true, background: true});
     }
     if (!r.scanning) {
       scanning = false;
@@ -329,29 +331,48 @@ async function loadPage(page) {
 }
 
 async function loadPageWithOptions(page, opts) {
-  if (refreshingResults) return;
+  opts = opts || {};
+  if (refreshingResults) {
+    if (!opts.background) pendingManualPage = page;
+    return;
+  }
   refreshingResults = true;
-  curPage = page;
+  if (!opts.background) curPage = page;
+  const targetPage = page;
   const params = new URLSearchParams();
-  params.set('offset', String((page - 1) * PAGE_SIZE));
+  params.set('offset', String((targetPage - 1) * PAGE_SIZE));
   params.set('limit', String(PAGE_SIZE));
   if (filterLevel !== 'all') params.set('level', filterLevel);
   if (filterType !== 'all') params.set('type', filterType);
   if (filterKeyword) params.set('kw', filterKeyword);
   try {
     const r = await fetchJSON('/api/results?' + params.toString(), {}, 5000);
+    if (opts.preserveDuringScan && scanning && total > 0 && (r.total || 0) === 0) {
+      refreshingResults = false;
+      renderPendingManualPage();
+      return;
+    }
     pageResults = r.results || [];
     total = r.total || 0;
   } catch (e) {
-    if (!opts || !opts.preserveOnError) {
+    if (!opts.preserveOnError) {
       pageResults = []; total = 0;
     }
     document.getElementById('fcount').textContent = `结果刷新失败，已保留当前页`;
     refreshingResults = false;
+    renderPendingManualPage();
     return;
   }
   refreshingResults = false;
   renderResults();
+  renderPendingManualPage();
+}
+
+function renderPendingManualPage() {
+  if (pendingManualPage == null) return;
+  const next = pendingManualPage;
+  pendingManualPage = null;
+  loadPageWithOptions(next, {});
 }
 
 async function fetchJSON(url, options, timeoutMs) {
@@ -511,7 +532,11 @@ function pickDir() {
 
 function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
 function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
-function eventName(e) { return e === 'timeout' ? '超时' : e === 'done' ? '完成' : e; }
+function eventName(e) {
+  return e === 'timeout' ? '超时'
+    : e === 'timeout_backlog' ? '超时积压'
+    : e === 'done' ? '完成' : e;
+}
 function escapeHtml(s) {
   return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }

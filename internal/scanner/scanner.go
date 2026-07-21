@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/charlievieth/fastwalk"
 
+	"sensitivescanner/internal/diag"
 	"sensitivescanner/internal/extract"
 	"sensitivescanner/internal/patterns"
 	"sensitivescanner/internal/types"
@@ -53,6 +55,7 @@ const (
 	skipProfileDisabled = "profile_disabled"
 	skipInaccessible    = "inaccessible"
 	skipTimeout         = "timeout"
+	skipTimeoutBacklog  = "timeout_backlog"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -93,8 +96,9 @@ type Scanner struct {
 	active  map[int]activeFile
 	events  []ScanEvent
 
-	scanned    atomic.Int64 // 已完成扫描的文件数
-	discovered atomic.Int64 // walker 已发现的文件数（扫描中实时增长）
+	scanned    atomic.Int64  // 已完成扫描的文件数
+	discovered atomic.Int64  // walker 已发现的文件数（扫描中实时增长）
+	scanSlots  chan struct{} // 限制超时后尚未退出的解析 goroutine，避免资源耗尽
 }
 
 type activeFile struct {
@@ -125,12 +129,13 @@ func New(cfg Config) *Scanner {
 	}
 	single, cross := patterns.SplitCrossLine(ps)
 	return &Scanner{
-		cfg:      cfg,
-		patterns: ps,
-		single:   single,
-		cross:    cross,
-		stats:    types.NewScanStatistics(),
-		active:   map[int]activeFile{},
+		cfg:       cfg,
+		patterns:  ps,
+		single:    single,
+		cross:     cross,
+		stats:     types.NewScanStatistics(),
+		active:    map[int]activeFile{},
+		scanSlots: make(chan struct{}, cfg.Workers*2),
 	}
 }
 
@@ -158,6 +163,12 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.MaxResults <= 0 {
 		cfg.MaxResults = defaultMaxResults
+	}
+	if cfg.Workers <= 0 && cfg.ScanProfile == ProfileFullDiskFast {
+		cfg.Workers = runtime.NumCPU()
+		if cfg.Workers > 8 {
+			cfg.Workers = 8
+		}
 	}
 	if cfg.Workers <= 0 {
 		cfg.Workers = runtime.NumCPU()
@@ -417,6 +428,8 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 	}()
 
 	start := time.Now()
+	diag.Printf("scan start profile=%s walk=%s workers=%d timeout=%s recursive=%v roots=%q log=%s",
+		s.cfg.ScanProfile, s.cfg.WalkEngine, s.cfg.Workers, s.cfg.PerFileTimeout, recursive, paths, diag.LogPath())
 
 	fileCh := make(chan string, walkBuffer)
 	resultCh := make(chan []types.ScanResult, s.cfg.Workers)
@@ -485,10 +498,14 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 	s.mu.Lock()
 	s.stats.TotalFiles = int(s.discovered.Load())
 	s.stats.ScanDuration = time.Since(start).Seconds()
+	finalStats := s.stats
 	s.mu.Unlock()
 	s.pmu.Lock()
 	s.current = ""
 	s.pmu.Unlock()
+	diag.Printf("scan finish duration=%.1fs discovered=%d scanned=%d skipped_files=%d skipped_dirs=%d issues=%d",
+		finalStats.ScanDuration, finalStats.TotalFiles, finalStats.ScannedFiles,
+		finalStats.SkippedFiles, finalStats.SkippedDirs, finalStats.TotalIssues)
 }
 
 // scanFileTimeout 对单文件扫描加超时与 panic 保护：超时或异常则跳过该文件，
@@ -496,17 +513,32 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 // 超时后底层 goroutine 会在自身操作（OCR 60s / 常规 ReadFile）完成后自行退出，不会永久泄漏。
 func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) []types.ScanResult {
 	type result struct{ r []types.ScanResult }
+	select {
+	case s.scanSlots <- struct{}{}:
+	default:
+		s.addSkipped(false, skipTimeoutBacklog)
+		s.addEvent("timeout_backlog", worker, path, 0)
+		return nil
+	}
 	ch := make(chan result, 1)
 	start := time.Now()
 	go func() {
-		defer func() { _ = recover() }() // 防个别文件触发 panic 拖垮整个 worker
+		defer func() {
+			<-s.scanSlots
+			if v := recover(); v != nil {
+				diag.Printf("scan panic worker=%d seconds=%d path=%q panic=%v stack=%s",
+					worker, int(time.Since(start).Seconds()), path, v, string(debug.Stack()))
+			}
+		}() // 防个别文件触发 panic 拖垮整个 worker
 		ch <- result{s.ScanFile(path)}
 	}()
+	timer := time.NewTimer(s.cfg.PerFileTimeout)
+	defer timer.Stop()
 	select {
 	case r := <-ch:
 		s.addEvent("done", worker, path, int(time.Since(start).Seconds()))
 		return r.r
-	case <-time.After(s.cfg.PerFileTimeout):
+	case <-timer.C:
 		s.addSkipped(false, skipTimeout)
 		s.addEvent("timeout", worker, path, int(s.cfg.PerFileTimeout.Seconds()))
 		return nil
@@ -546,7 +578,6 @@ func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, 
 
 func (s *Scanner) addEvent(event string, worker int, path string, seconds int) {
 	s.pmu.Lock()
-	defer s.pmu.Unlock()
 	s.events = append(s.events, ScanEvent{
 		Time:    time.Now(),
 		Event:   event,
@@ -558,10 +589,20 @@ func (s *Scanner) addEvent(event string, worker int, path string, seconds int) {
 		copy(s.events, s.events[len(s.events)-maxRecentEvents:])
 		s.events = s.events[:maxRecentEvents]
 	}
+	s.pmu.Unlock()
+	if event == "timeout" || event == "timeout_backlog" || event == "cancel" || (event == "done" && seconds >= 10) {
+		diag.Printf("scan event=%s worker=%d seconds=%d path=%q", event, worker, seconds, path)
+	}
 }
 
 // walkDir 流式遍历目录，每个可扫描文件 discovered++ 并发送到 fileCh；响应 ctx 停止。
 func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, fileCh chan<- string) {
+	start := time.Now()
+	diag.Printf("walk start root=%q recursive=%v engine=%s", root, recursive, s.cfg.WalkEngine)
+	defer func() {
+		diag.Printf("walk finish root=%q seconds=%d discovered=%d skipped_files=%d skipped_dirs=%d",
+			root, int(time.Since(start).Seconds()), s.discovered.Load(), s.Stats().SkippedFiles, s.Stats().SkippedDirs)
+	}()
 	send := func(path string) bool {
 		s.discovered.Add(1)
 		select {
