@@ -288,12 +288,14 @@ async function poll() {
       .join('；');
     const stall = stallSec >= 15
       ? `<span class="warn">已 ${stallSec}s 无新增，活跃文件：${active || '无'}${recent ? '；最近事件：' + recent : ''}</span>` : '';
+    const stopReason = r.stats && r.stats.stop_reason
+      ? `<span class="warn">扫描已停止：${stopReasonName(r.stats.stop_reason)}</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
       `<span>已跳过: ${(r.stats.skipped_files||0)} 文件 / ${(r.stats.skipped_dirs||0)} 目录</span>` +
       `<span>问题: ${r.stats.total_issues}</span>` +
-      `<span class="muted">日志: ${escapeHtml(r.log_path || '')}</span>${trunc}${stall}`;
+      `<span class="muted">日志: ${escapeHtml(r.log_path || '')}</span>${trunc}${stopReason}${stall}`;
     const now = Date.now();
     if (now - lastResultRefresh > 1000) {
       lastResultRefresh = now;
@@ -536,6 +538,9 @@ function eventName(e) {
   return e === 'timeout' ? '超时'
     : e === 'timeout_backlog' ? '超时积压'
     : e === 'done' ? '完成' : e;
+}
+function stopReasonName(r) {
+  return r === 'memory_guard' ? '内存保护' : r;
 }
 function escapeHtml(s) {
   return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

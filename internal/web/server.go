@@ -218,7 +218,7 @@ func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
 				stoppedForMemory = true
 				diag.Printf("watchdog memory_guard_stop heap_mb=%d sys_mb=%d scanned=%d total=%d",
 					mem.HeapAlloc/1024/1024, mem.Sys/1024/1024, scanned, total)
-				sc.Stop()
+				sc.StopWithReason("memory_guard")
 			}
 			for i, f := range active {
 				if i >= 5 {

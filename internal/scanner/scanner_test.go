@@ -342,12 +342,23 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if s.cfg.MaxRichFileSize != s.cfg.MaxFileSize {
 		t.Fatalf("full_disk_fast MaxRichFileSize=%d want MaxFileSize %d", s.cfg.MaxRichFileSize, s.cfg.MaxFileSize)
 	}
+	if s.cfg.RichWorkers != 1 {
+		t.Fatalf("full_disk_fast RichWorkers=%d want 1", s.cfg.RichWorkers)
+	}
 }
 
 func TestRichDocumentLimitFollowsMaxFileSize(t *testing.T) {
 	s := New(Config{MaxFileSize: 12 * 1024 * 1024})
 	if s.cfg.MaxRichFileSize != s.cfg.MaxFileSize {
 		t.Fatalf("MaxRichFileSize=%d want MaxFileSize %d", s.cfg.MaxRichFileSize, s.cfg.MaxFileSize)
+	}
+}
+
+func TestStopWithReason(t *testing.T) {
+	s := New(Config{})
+	s.StopWithReason("memory_guard")
+	if got := s.Stats().StopReason; got != "memory_guard" {
+		t.Fatalf("StopReason=%q want memory_guard", got)
 	}
 }
 

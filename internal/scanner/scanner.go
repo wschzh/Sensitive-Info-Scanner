@@ -83,6 +83,7 @@ type Config struct {
 	PerFileTimeout      time.Duration // 单文件超时，0 = 默认 120s；full_disk_fast 默认 30s
 	MaxTextSize         int           // 提取后文本上限（字节），0 = 默认 50MB；full_disk_fast 默认 8MB
 	MaxRichFileSize     int64         // Office/PDF 富文档原文件上限，0 = 跟随 MaxFileSize
+	RichWorkers         int           // Office/PDF 富文档解析并发，0 = normal 2 / full_disk_fast 1
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。
@@ -105,6 +106,7 @@ type Scanner struct {
 	scanned    atomic.Int64  // 已完成扫描的文件数
 	discovered atomic.Int64  // walker 已发现的文件数（扫描中实时增长）
 	scanSlots  chan struct{} // 限制超时后尚未退出的解析 goroutine，避免资源耗尽
+	richSlots  chan struct{} // 限制 Office/PDF 富文档解析并发，降低内存峰值
 	backlogLog atomic.Int64
 }
 
@@ -143,6 +145,7 @@ func New(cfg Config) *Scanner {
 		stats:     types.NewScanStatistics(),
 		active:    map[int]activeFile{},
 		scanSlots: make(chan struct{}, cfg.Workers*2),
+		richSlots: make(chan struct{}, cfg.RichWorkers),
 	}
 }
 
@@ -163,6 +166,9 @@ func normalizeConfig(cfg Config) Config {
 		}
 		if cfg.MaxTextSize <= 0 {
 			cfg.MaxTextSize = fullDiskMaxTextSize
+		}
+		if cfg.RichWorkers <= 0 {
+			cfg.RichWorkers = 1
 		}
 	}
 	if cfg.PerFileTimeout <= 0 {
@@ -194,6 +200,12 @@ func normalizeConfig(cfg Config) Config {
 	}
 	if cfg.Workers < 1 {
 		cfg.Workers = 1
+	}
+	if cfg.RichWorkers <= 0 {
+		cfg.RichWorkers = 2
+	}
+	if cfg.RichWorkers > cfg.Workers {
+		cfg.RichWorkers = cfg.Workers
 	}
 	if cfg.KeepLevel == "" {
 		cfg.KeepLevel = types.Medium
@@ -369,7 +381,15 @@ func (s *Scanner) RecentEvents() []ScanEvent {
 
 // Stop 请求停止扫描（取消当前扫描的 context，worker/walker 随即退出）。
 func (s *Scanner) Stop() {
+	s.StopWithReason("")
+}
+
+// StopWithReason 请求停止扫描并记录原因，供 Web 前端区分正常完成和保护性停止。
+func (s *Scanner) StopWithReason(reason string) {
 	s.mu.Lock()
+	if reason != "" {
+		s.stats.StopReason = reason
+	}
 	if s.cancel != nil {
 		s.cancel()
 	}
@@ -527,11 +547,14 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 // scanFileTimeout 对单文件扫描加超时与 panic 保护：超时或异常则跳过该文件，
 // 避免 worker 因个别卡死文件（特殊文件 ReadFile 阻塞、损坏图片 OCR 卡住等）永久停滞。
 // 超时后底层 goroutine 会在自身操作（OCR 60s / 常规 ReadFile）完成后自行退出，不会永久泄漏。
-func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) []types.ScanResult {
+func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string, release func()) []types.ScanResult {
 	type result struct{ r []types.ScanResult }
 	select {
 	case s.scanSlots <- struct{}{}:
 	default:
+		if release != nil {
+			release()
+		}
 		s.addSkipped(false, skipTimeoutBacklog)
 		s.addBacklogEvent(worker, path)
 		select {
@@ -546,6 +569,9 @@ func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) 
 		var out []types.ScanResult
 		defer func() {
 			<-s.scanSlots
+			if release != nil {
+				release()
+			}
 			if v := recover(); v != nil {
 				diag.Printf("scan panic worker=%d seconds=%d path=%q panic=%v stack=%s",
 					worker, int(time.Since(start).Seconds()), path, v, string(debug.Stack()))
@@ -586,7 +612,14 @@ func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, 
 			s.active[id] = activeFile{Path: path, Started: time.Now()}
 			s.pmu.Unlock()
 			s.addEvent("start", id, path, 0)
-			fr := s.scanFileTimeout(ctx, id, path)
+			release, ok := s.acquireRichSlot(ctx, path)
+			if !ok {
+				s.pmu.Lock()
+				delete(s.active, id)
+				s.pmu.Unlock()
+				return
+			}
+			fr := s.scanFileTimeout(ctx, id, path, release)
 			s.pmu.Lock()
 			delete(s.active, id)
 			s.pmu.Unlock()
@@ -596,6 +629,21 @@ func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, 
 				return
 			}
 		}
+	}
+}
+
+func (s *Scanner) acquireRichSlot(ctx context.Context, path string) (func(), bool) {
+	if !isRichDocumentExt(strings.ToLower(filepath.Ext(path))) {
+		return nil, true
+	}
+	select {
+	case s.richSlots <- struct{}{}:
+		return func() {
+			<-s.richSlots
+			runtime.GC()
+		}, true
+	case <-ctx.Done():
+		return nil, false
 	}
 }
 
