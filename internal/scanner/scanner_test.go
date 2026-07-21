@@ -261,6 +261,9 @@ func TestScanPathsKeepsResultsAcrossRoots(t *testing.T) {
 	if stats.TotalIssues != 2 {
 		t.Fatalf("TotalIssues=%d want 2", stats.TotalIssues)
 	}
+	if len(s.RecentEvents()) == 0 {
+		t.Fatal("RecentEvents should record scan activity")
+	}
 }
 
 func TestShouldScanCompoundLogAndKeywordBoundary(t *testing.T) {
@@ -300,23 +303,6 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	}
 	if s.cfg.PerFileTimeout != 30*time.Second {
 		t.Fatalf("full_disk_fast PerFileTimeout=%s want 30s", s.cfg.PerFileTimeout)
-	}
-}
-
-func TestFullDiskFastSkipsLegacyDoc(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "legacy.doc")
-	if err := os.WriteFile(path, []byte("api_key: should_skip_1234567890"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	s := New(Config{ScanProfile: ProfileFullDiskFast})
-	s.ScanSingle(path)
-	stats := s.Stats()
-	if stats.ScannedFiles != 0 {
-		t.Fatalf("legacy .doc should be skipped in full_disk_fast, scanned=%d", stats.ScannedFiles)
-	}
-	if stats.SkippedByReason[skipProfileDisabled] != 1 {
-		t.Fatalf("profile disabled skips=%d want 1", stats.SkippedByReason[skipProfileDisabled])
 	}
 }
 

@@ -280,8 +280,13 @@ async function poll() {
     const active = (r.active_files || []).slice(0, 3)
       .map(f => `#${f.worker} ${f.seconds}s ${escapeHtml(shortPath(f.path || ''))}`)
       .join('；');
+    const recent = (r.recent_events || [])
+      .filter(e => e.event === 'timeout' || (e.event === 'done' && e.seconds >= 10))
+      .slice(-3)
+      .map(e => `${eventName(e.event)} #${e.worker} ${e.seconds || 0}s ${escapeHtml(shortPath(e.path || ''))}`)
+      .join('；');
     const stall = stallSec >= 15
-      ? `<span class="warn">已 ${stallSec}s 无新增，活跃文件：${active || '无'}</span>` : '';
+      ? `<span class="warn">已 ${stallSec}s 无新增，活跃文件：${active || '无'}${recent ? '；最近事件：' + recent : ''}</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
@@ -506,6 +511,7 @@ function pickDir() {
 
 function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
 function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
+function eventName(e) { return e === 'timeout' ? '超时' : e === 'done' ? '完成' : e; }
 function escapeHtml(s) {
   return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }

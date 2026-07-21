@@ -24,6 +24,7 @@ const (
 	defaultMaxFileSize    int64 = 10 * 1024 * 1024
 	defaultMaxResults           = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
 	maxWorkers                  = 64
+	maxRecentEvents             = 80
 	walkBuffer                  = 1024
 	perFileTimeout              = 120 * time.Second // 单文件扫描超时：防个别卡死文件拖垮 worker
 	maxMatchesPerLine           = 5000              // 每行每 pattern 最多记录匹配数（防 minified 巨行拖慢）
@@ -90,6 +91,7 @@ type Scanner struct {
 	pmu     sync.Mutex // 保护 current
 	current string
 	active  map[int]activeFile
+	events  []ScanEvent
 
 	scanned    atomic.Int64 // 已完成扫描的文件数
 	discovered atomic.Int64 // walker 已发现的文件数（扫描中实时增长）
@@ -104,6 +106,14 @@ type ActiveFile struct {
 	Worker  int    `json:"worker"`
 	Path    string `json:"path"`
 	Seconds int    `json:"seconds"`
+}
+
+type ScanEvent struct {
+	Time    time.Time `json:"time"`
+	Event   string    `json:"event"`
+	Worker  int       `json:"worker"`
+	Path    string    `json:"path"`
+	Seconds int       `json:"seconds,omitempty"`
 }
 
 // New 创建扫描器。
@@ -321,6 +331,15 @@ func (s *Scanner) ActiveFiles() []ActiveFile {
 	return out
 }
 
+// RecentEvents 返回最近的扫描事件，便于诊断卡住、超时和慢文件。
+func (s *Scanner) RecentEvents() []ScanEvent {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	out := make([]ScanEvent, len(s.events))
+	copy(out, s.events)
+	return out
+}
+
 // Stop 请求停止扫描（取消当前扫描的 context，worker/walker 随即退出）。
 func (s *Scanner) Stop() {
 	s.mu.Lock()
@@ -341,6 +360,7 @@ func (s *Scanner) reset() {
 	s.pmu.Lock()
 	s.current = ""
 	s.active = map[int]activeFile{}
+	s.events = nil
 	s.pmu.Unlock()
 }
 
@@ -474,20 +494,24 @@ func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 // scanFileTimeout 对单文件扫描加超时与 panic 保护：超时或异常则跳过该文件，
 // 避免 worker 因个别卡死文件（特殊文件 ReadFile 阻塞、损坏图片 OCR 卡住等）永久停滞。
 // 超时后底层 goroutine 会在自身操作（OCR 60s / 常规 ReadFile）完成后自行退出，不会永久泄漏。
-func (s *Scanner) scanFileTimeout(ctx context.Context, path string) []types.ScanResult {
+func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) []types.ScanResult {
 	type result struct{ r []types.ScanResult }
 	ch := make(chan result, 1)
+	start := time.Now()
 	go func() {
 		defer func() { _ = recover() }() // 防个别文件触发 panic 拖垮整个 worker
 		ch <- result{s.ScanFile(path)}
 	}()
 	select {
 	case r := <-ch:
+		s.addEvent("done", worker, path, int(time.Since(start).Seconds()))
 		return r.r
 	case <-time.After(s.cfg.PerFileTimeout):
 		s.addSkipped(false, skipTimeout)
+		s.addEvent("timeout", worker, path, int(s.cfg.PerFileTimeout.Seconds()))
 		return nil
 	case <-ctx.Done():
+		s.addEvent("cancel", worker, path, int(time.Since(start).Seconds()))
 		return nil
 	}
 }
@@ -506,7 +530,8 @@ func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, 
 			s.current = path
 			s.active[id] = activeFile{Path: path, Started: time.Now()}
 			s.pmu.Unlock()
-			fr := s.scanFileTimeout(ctx, path)
+			s.addEvent("start", id, path, 0)
+			fr := s.scanFileTimeout(ctx, id, path)
 			s.pmu.Lock()
 			delete(s.active, id)
 			s.pmu.Unlock()
@@ -516,6 +541,22 @@ func (s *Scanner) scanWorker(ctx context.Context, id int, fileCh <-chan string, 
 				return
 			}
 		}
+	}
+}
+
+func (s *Scanner) addEvent(event string, worker int, path string, seconds int) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	s.events = append(s.events, ScanEvent{
+		Time:    time.Now(),
+		Event:   event,
+		Worker:  worker,
+		Path:    path,
+		Seconds: seconds,
+	})
+	if len(s.events) > maxRecentEvents {
+		copy(s.events, s.events[len(s.events)-maxRecentEvents:])
+		s.events = s.events[:maxRecentEvents]
 	}
 }
 
@@ -634,10 +675,6 @@ func isMinified(content string) bool {
 func (s *Scanner) readFile(path string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if patterns.IsExcludedFileName(filepath.Base(path)) || !patterns.IsScannableExt(ext) {
-		return "", false
-	}
-	if s.cfg.ScanProfile == ProfileFullDiskFast && ext == ".doc" {
-		s.addSkipped(false, skipProfileDisabled)
 		return "", false
 	}
 	if fi, err := os.Stat(path); err == nil {
@@ -831,9 +868,6 @@ func (s *Scanner) shouldScan(path string) (bool, string) {
 	ext := strings.ToLower(filepath.Ext(path))
 	if patterns.IsExcludedFileName(filepath.Base(path)) {
 		return false, skipExcludedExt
-	}
-	if s.cfg.ScanProfile == ProfileFullDiskFast && ext == ".doc" {
-		return false, skipProfileDisabled
 	}
 	if !patterns.IsScannableExt(ext) {
 		return false, skipUnsupportedExt
