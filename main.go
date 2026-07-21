@@ -48,6 +48,7 @@ func main() {
 	workers := flag.Int("workers", 0, "并发 worker 数(0=CPU 核数)")
 	maxResults := flag.Int("max-results", 100000, "内存保留结果上限")
 	profile := flag.String("profile", scanner.ProfileNormal, "扫描模式 (normal|full_disk_fast|deep)")
+	walkEngine := flag.String("walk-engine", scanner.WalkEngineStd, "目录遍历引擎 (std|fastwalk)")
 	var levels levelFlag
 	flag.Var(&levels, "level", "扫描级别(可多选: critical/high/medium/low)")
 	flag.Parse()
@@ -75,6 +76,7 @@ func main() {
 		Workers:     *workers,
 		MaxResults:  *maxResults,
 		ScanProfile: *profile,
+		WalkEngine:  *walkEngine,
 	})
 
 	fmt.Printf("开始扫描: %s\n", path)

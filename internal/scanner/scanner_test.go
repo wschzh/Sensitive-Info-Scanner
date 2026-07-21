@@ -206,6 +206,42 @@ func TestScanDirectorySkipsExcludedDirsAndPathKeywords(t *testing.T) {
 	}
 }
 
+func TestWalkEnginesProduceSameStats(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(filepath.Join("src", "a.txt"), "api_key: same_stats_1234567890\n")
+	mustWrite(filepath.Join("src", "b.txt"), "tel: 13900000003\n")
+	mustWrite(filepath.Join("logs", "skip.txt"), "api_key: should_skip_1234567890\n")
+	mustWrite(filepath.Join("src", "debug.log.1"), "api_key: should_skip_abcdef123456\n")
+
+	std := New(Config{WalkEngine: WalkEngineStd})
+	std.ScanDirectory(dir, true)
+	fast := New(Config{WalkEngine: WalkEngineFastwalk})
+	fast.ScanDirectory(dir, true)
+
+	stdStats := std.Stats()
+	fastStats := fast.Stats()
+	if stdStats.ScannedFiles != fastStats.ScannedFiles {
+		t.Fatalf("ScannedFiles std=%d fast=%d", stdStats.ScannedFiles, fastStats.ScannedFiles)
+	}
+	if stdStats.TotalIssues != fastStats.TotalIssues {
+		t.Fatalf("TotalIssues std=%d fast=%d", stdStats.TotalIssues, fastStats.TotalIssues)
+	}
+	if stdStats.SkippedFiles != fastStats.SkippedFiles || stdStats.SkippedDirs != fastStats.SkippedDirs {
+		t.Fatalf("skipped std=%d/%d fast=%d/%d",
+			stdStats.SkippedFiles, stdStats.SkippedDirs, fastStats.SkippedFiles, fastStats.SkippedDirs)
+	}
+}
+
 func TestShouldScanCompoundLogAndKeywordBoundary(t *testing.T) {
 	s := New(Config{})
 	if ok, reason := s.shouldScan(filepath.Join("C:", "work", "app.log.1")); ok || reason != skipExcludedExt {

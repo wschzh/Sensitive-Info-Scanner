@@ -3,6 +3,7 @@ module sensitivescanner
 go 1.26.5
 
 require (
+	github.com/charlievieth/fastwalk v1.0.14
 	github.com/ledongthuc/pdf v0.0.0-20250511090121-5959a4027728
 	github.com/xuri/excelize/v2 v2.11.0
 	golang.org/x/text v0.40.0

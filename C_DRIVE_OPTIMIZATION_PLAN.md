@@ -148,11 +148,11 @@
 
 ### 3.1 引入 fastwalk 实验开关
 
-- [ ] 评估库：`github.com/charlievieth/fastwalk` 或维护活跃的同类库。
-- [ ] 新增 `scanner.Config.WalkEngine string`：
+- [x] 评估库：`github.com/charlievieth/fastwalk` 或维护活跃的同类库。
+- [x] 新增 `scanner.Config.WalkEngine string`：
   - `std`
   - `fastwalk`
-- [ ] 初期默认仍为 `std`，Web/CLI 可开启 `fastwalk`。
+- [x] 初期默认仍为 `std`，Web/CLI 可开启 `fastwalk`。
 - [ ] Windows 下重点测试权限错误、符号链接、junction、长路径。
 
 验收标准：
@@ -163,9 +163,9 @@
 
 ### 3.2 基准测试
 
-- [ ] 新增 `internal/scanner/walk_benchmark_test.go`。
-- [ ] 构造多层目录和大量小文件场景。
-- [ ] 对比：
+- [x] 新增 `internal/scanner/walk_benchmark_test.go`。
+- [x] 构造多层目录和大量小文件场景。
+- [x] 对比：
   - 遍历耗时
   - discovered 数量
   - skipped 数量
@@ -180,6 +180,15 @@ go test -bench=Walk -benchmem ./internal/scanner
 ```
 
 - README 或 TODO 中记录一组本机对比结果。
+
+本机 macOS 初测：
+
+```text
+BenchmarkWalkEngineStd-8         5062593 ns/op  1202275 B/op  11836 allocs/op
+BenchmarkWalkEngineFastwalk-8    4966164 ns/op  1142300 B/op  11368 allocs/op
+```
+
+结论：macOS 小样本仅小幅领先；Windows 大目录仍需实机复测后决定是否默认启用。
 
 ## 阶段四：匹配器优化
 

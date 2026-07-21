@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/charlievieth/fastwalk"
+
 	"sensitivescanner/internal/extract"
 	"sensitivescanner/internal/patterns"
 	"sensitivescanner/internal/types"
@@ -33,6 +35,11 @@ const (
 	ProfileNormal       = "normal"
 	ProfileFullDiskFast = "full_disk_fast"
 	ProfileDeep         = "deep"
+)
+
+const (
+	WalkEngineStd      = "std"
+	WalkEngineFastwalk = "fastwalk"
 )
 
 const (
@@ -60,6 +67,7 @@ type Config struct {
 	MaxResults          int           // 内存保留的结果上限，0 = 默认 100000
 	KeepLevel           types.Level   // >= 该级别的结果永远保留（不受 MaxResults 限制），空 = Medium
 	ScanProfile         string        // normal/full_disk_fast/deep，空 = normal
+	WalkEngine          string        // std/fastwalk，空 = std
 	ExcludePathKeywords []string      // 路径分段关键词排除，空 = 默认 log/logs/cache/temp/tmp
 	DisableImages       bool          // 跳过图片/OCR 慢路径
 }
@@ -103,6 +111,9 @@ func New(cfg Config) *Scanner {
 func normalizeConfig(cfg Config) Config {
 	if cfg.ScanProfile == "" {
 		cfg.ScanProfile = ProfileNormal
+	}
+	if cfg.WalkEngine == "" {
+		cfg.WalkEngine = WalkEngineStd
 	}
 	if cfg.ScanProfile == ProfileFullDiskFast {
 		if len(cfg.ScanLevels) == 0 {
@@ -433,7 +444,7 @@ func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, file
 		}
 	}
 	if recursive {
-		_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		walkFn := func(path string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -459,7 +470,12 @@ func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, file
 				s.addSkipped(false, reason)
 			}
 			return nil
-		})
+		}
+		if s.cfg.WalkEngine == WalkEngineFastwalk {
+			_ = fastwalk.Walk(nil, root, walkFn)
+			return
+		}
+		_ = filepath.WalkDir(root, walkFn)
 	} else {
 		entries, _ := os.ReadDir(root)
 		for _, e := range entries {

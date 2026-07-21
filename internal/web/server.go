@@ -98,6 +98,7 @@ type scanRequest struct {
 	Workers    int           `json:"workers"`
 	MaxResults int           `json:"max_results"`
 	Profile    string        `json:"profile"`
+	WalkEngine string        `json:"walk_engine"`
 }
 
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +132,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		Workers:     req.Workers,
 		MaxResults:  req.MaxResults,
 		ScanProfile: req.Profile,
+		WalkEngine:  req.WalkEngine,
 	})
 	s.scanner = sc
 	s.scanning = true
