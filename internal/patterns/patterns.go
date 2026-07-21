@@ -229,7 +229,7 @@ func IsExcludedDir(name string) bool { return excludeDirSet[strings.ToLower(name
 // ExcludeExtensions 需排除的扩展名（原 .log$/.tmp$）。
 var ExcludeExtensions = []string{
 	".log", ".tmp", ".out", ".err", ".pid", ".dat",
-	".bak", ".cache", ".bin", ".dll", ".exe", ".msi",
+	".cache", ".bin", ".dll", ".exe", ".msi",
 }
 
 // IsExcludedExt 扩展名是否在排除集合。

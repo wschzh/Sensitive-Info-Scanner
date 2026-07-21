@@ -92,10 +92,13 @@ func TestExcludedDirCaseInsensitive(t *testing.T) {
 }
 
 func TestExcludedNoiseExtensions(t *testing.T) {
-	for _, ext := range []string{".out", ".err", ".pid", ".dat", ".bak", ".cache", ".bin", ".dll", ".exe", ".msi"} {
+	for _, ext := range []string{".out", ".err", ".pid", ".dat", ".cache", ".bin", ".dll", ".exe", ".msi"} {
 		if !IsExcludedExt(ext) {
 			t.Errorf("扩展名 %q 应被排除", ext)
 		}
+	}
+	if IsExcludedExt(".bak") {
+		t.Error(".bak 备份文件可能泄露敏感信息，不应默认排除")
 	}
 }
 
