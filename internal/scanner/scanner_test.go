@@ -298,6 +298,9 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if stats.SkippedByReason[skipProfileDisabled] != 1 {
 		t.Fatalf("profile disabled skips=%d want 1", stats.SkippedByReason[skipProfileDisabled])
 	}
+	if s.cfg.PerFileTimeout != 30*time.Second {
+		t.Fatalf("full_disk_fast PerFileTimeout=%s want 30s", s.cfg.PerFileTimeout)
+	}
 }
 
 func TestPatternHintsDoNotSkipMatches(t *testing.T) {

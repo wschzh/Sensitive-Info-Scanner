@@ -167,6 +167,9 @@ let filterType = 'all';
 let filterKeyword = '';
 let rulesLoaded = false;
 let lastResultRefresh = 0;
+let refreshingResults = false;
+let lastScannedCount = 0;
+let lastProgressChangeAt = Date.now();
 applyProfilePreset();
 
 // ===== Tab 切换 =====
@@ -246,6 +249,8 @@ async function startScan() {
   scanning = true;
   pageResults = []; total = 0; curPage = 1;
   lastResultRefresh = 0;
+  lastScannedCount = 0;
+  lastProgressChangeAt = Date.now();
   renderResults();
   document.getElementById('btnStop').disabled = false;
   poll();
@@ -263,19 +268,26 @@ function exitApp() {
 async function poll() {
   if (!scanning) return;
   try {
-    const r = await (await fetch('/api/progress')).json();
+    const r = await fetchJSON('/api/progress', {}, 4000);
     document.getElementById('bar').style.width = r.progress + '%';
     const trunc = r.stats && r.stats.truncated_count > 0
       ? ` <span class="warn">（已截断 ${r.stats.truncated_count} 条，仅保留高优先级）</span>` : '';
+    if (r.scanned !== lastScannedCount) {
+      lastScannedCount = r.scanned;
+      lastProgressChangeAt = Date.now();
+    }
+    const stallSec = Math.floor((Date.now() - lastProgressChangeAt) / 1000);
+    const stall = stallSec >= 15
+      ? `<span class="warn">已 ${stallSec}s 无新增，可能正在处理大文件或受权限/磁盘 IO 影响</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
       `<span>已跳过: ${(r.stats.skipped_files||0)} 文件 / ${(r.stats.skipped_dirs||0)} 目录</span>` +
-      `<span>问题: ${r.stats.total_issues}</span>${trunc}`;
+      `<span>问题: ${r.stats.total_issues}</span>${trunc}${stall}`;
     const now = Date.now();
     if (now - lastResultRefresh > 1000) {
       lastResultRefresh = now;
-      await loadPage(curPage);
+      loadPageWithOptions(curPage, {preserveOnError: true});
     }
     if (!r.scanning) {
       scanning = false;
@@ -305,6 +317,12 @@ function applyProfilePreset() {
 }
 
 async function loadPage(page) {
+  return loadPageWithOptions(page, {});
+}
+
+async function loadPageWithOptions(page, opts) {
+  if (refreshingResults) return;
+  refreshingResults = true;
   curPage = page;
   const params = new URLSearchParams();
   params.set('offset', String((page - 1) * PAGE_SIZE));
@@ -313,13 +331,31 @@ async function loadPage(page) {
   if (filterType !== 'all') params.set('type', filterType);
   if (filterKeyword) params.set('kw', filterKeyword);
   try {
-    const r = await (await fetch('/api/results?' + params.toString())).json();
+    const r = await fetchJSON('/api/results?' + params.toString(), {}, 5000);
     pageResults = r.results || [];
     total = r.total || 0;
   } catch (e) {
-    pageResults = []; total = 0;
+    if (!opts || !opts.preserveOnError) {
+      pageResults = []; total = 0;
+    }
+    document.getElementById('fcount').textContent = `结果刷新失败，已保留当前页`;
+    refreshingResults = false;
+    return;
   }
+  refreshingResults = false;
   renderResults();
+}
+
+async function fetchJSON(url, options, timeoutMs) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs || 5000);
+  try {
+    const res = await fetch(url, {...(options || {}), signal: ctrl.signal});
+    if (!res.ok) throw new Error(await res.text());
+    return await res.json();
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function renderResults() {

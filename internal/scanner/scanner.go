@@ -51,6 +51,7 @@ const (
 	skipNonRegular      = "non_regular"
 	skipProfileDisabled = "profile_disabled"
 	skipInaccessible    = "inaccessible"
+	skipTimeout         = "timeout"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -71,6 +72,7 @@ type Config struct {
 	WalkEngine          string        // std/fastwalk，空 = std
 	ExcludePathKeywords []string      // 路径分段关键词排除，空 = 默认 log/logs/cache/temp/tmp
 	DisableImages       bool          // 跳过图片/OCR 慢路径
+	PerFileTimeout      time.Duration // 单文件超时，0 = 默认 120s；full_disk_fast 默认 30s
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。
@@ -121,6 +123,12 @@ func normalizeConfig(cfg Config) Config {
 			cfg.ScanLevels = []types.Level{types.Critical, types.High}
 		}
 		cfg.DisableImages = true
+		if cfg.PerFileTimeout <= 0 {
+			cfg.PerFileTimeout = 30 * time.Second
+		}
+	}
+	if cfg.PerFileTimeout <= 0 {
+		cfg.PerFileTimeout = perFileTimeout
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = defaultMaxFileSize
@@ -437,7 +445,8 @@ func (s *Scanner) scanFileTimeout(ctx context.Context, path string) []types.Scan
 	select {
 	case r := <-ch:
 		return r.r
-	case <-time.After(perFileTimeout):
+	case <-time.After(s.cfg.PerFileTimeout):
+		s.addSkipped(false, skipTimeout)
 		return nil
 	case <-ctx.Done():
 		return nil
