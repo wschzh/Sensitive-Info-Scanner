@@ -81,6 +81,9 @@ func genTextTo(s *scanner.Scanner, w io.Writer) error {
 	if stats.TruncatedCount > 0 {
 		fmt.Fprintf(w, "  (已截断 %d 条，仅保留高优先级)", stats.TruncatedCount)
 	}
+	if stats.SkippedFiles > 0 || stats.SkippedDirs > 0 {
+		fmt.Fprintf(w, "\n已跳过: %d 个文件 / %d 个目录", stats.SkippedFiles, stats.SkippedDirs)
+	}
 	fmt.Fprintf(w, "\n\n问题级别分布:\n")
 	for _, lv := range types.AllLevels {
 		if c := stats.IssuesByLevel[lv]; c > 0 {
@@ -113,6 +116,9 @@ func genJSONTo(s *scanner.Scanner, w io.Writer) error {
 		"statistics": map[string]any{
 			"total_files":       stats.TotalFiles,
 			"scanned_files":     stats.ScannedFiles,
+			"skipped_files":     stats.SkippedFiles,
+			"skipped_dirs":      stats.SkippedDirs,
+			"skipped_by_reason": stats.SkippedByReason,
 			"files_with_issues": stats.FilesWithIssues,
 			"total_issues":      stats.TotalIssues,
 			"issues_by_level":   stats.IssuesByLevel,

@@ -47,6 +47,7 @@ func main() {
 	maxSize := flag.Int("max-size", 10*1024*1024, "最大文件大小(字节)")
 	workers := flag.Int("workers", 0, "并发 worker 数(0=CPU 核数)")
 	maxResults := flag.Int("max-results", 100000, "内存保留结果上限")
+	profile := flag.String("profile", scanner.ProfileNormal, "扫描模式 (normal|full_disk_fast|deep)")
 	var levels levelFlag
 	flag.Var(&levels, "level", "扫描级别(可多选: critical/high/medium/low)")
 	flag.Parse()
@@ -73,6 +74,7 @@ func main() {
 		ScanLevels:  levels.levels,
 		Workers:     *workers,
 		MaxResults:  *maxResults,
+		ScanProfile: *profile,
 	})
 
 	fmt.Printf("开始扫描: %s\n", path)
@@ -91,8 +93,8 @@ func main() {
 			fmt.Fprintf(os.Stderr, "写报告失败: %v\n", err)
 		} else {
 			stats := s.Stats()
-			fmt.Printf("完成: 扫描 %d 个文件，发现 %d 个敏感信息，报告已保存到 %s\n",
-				stats.ScannedFiles, stats.TotalIssues, *output)
+			fmt.Printf("完成: 扫描 %d 个文件，跳过 %d 个文件 / %d 个目录，发现 %d 个敏感信息，报告已保存到 %s\n",
+				stats.ScannedFiles, stats.SkippedFiles, stats.SkippedDirs, stats.TotalIssues, *output)
 		}
 	}
 }

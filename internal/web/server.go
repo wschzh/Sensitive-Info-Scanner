@@ -97,6 +97,7 @@ type scanRequest struct {
 	Levels     []types.Level `json:"levels"`
 	Workers    int           `json:"workers"`
 	MaxResults int           `json:"max_results"`
+	Profile    string        `json:"profile"`
 }
 
 func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +130,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		ScanLevels:  req.Levels,
 		Workers:     req.Workers,
 		MaxResults:  req.MaxResults,
+		ScanProfile: req.Profile,
 	})
 	s.scanner = sc
 	s.scanning = true

@@ -29,7 +29,7 @@
 
 ### 1.1 扩展默认排除目录
 
-- [ ] Windows 系统目录默认跳过：
+- [x] Windows 系统目录默认跳过：
   - `Windows`
   - `Program Files`
   - `Program Files (x86)`
@@ -38,12 +38,12 @@
   - `System Volume Information`
   - `Recovery`
   - `PerfLogs`
-- [ ] 用户目录下缓存默认跳过：
+- [x] 用户目录下缓存默认跳过（通过 `cache/temp/tmp` 路径分段覆盖）：
   - `AppData\Local\Temp`
   - `AppData\Local\Microsoft\Windows\INetCache`
   - `AppData\Local\Google\Chrome\User Data\*\Cache`
   - `AppData\Local\Microsoft\Edge\User Data\*\Cache`
-- [ ] 开发/构建目录默认跳过：
+- [x] 开发/构建目录默认跳过：
   - `node_modules`
   - `.git`
   - `dist`
@@ -61,10 +61,10 @@
 
 ### 1.2 支持路径分段关键词排除
 
-- [ ] 新增 `scanner.Config.ExcludePathKeywords []string`。
-- [ ] 默认关键词：`log`, `logs`, `cache`, `temp`, `tmp`。
-- [ ] 使用路径分段匹配，避免误伤普通文件名的一部分。
-- [ ] 大小写不敏感。
+- [x] 新增 `scanner.Config.ExcludePathKeywords []string`。
+- [x] 默认关键词：`log`, `logs`, `cache`, `temp`, `tmp`。
+- [x] 使用路径分段匹配，避免误伤普通文件名的一部分。
+- [x] 大小写不敏感。
 
 验收标准：
 
@@ -73,7 +73,7 @@
 
 ### 1.3 扩展低价值扩展名排除
 
-- [ ] 默认跳过：
+- [x] 默认跳过：
   - `.log`
   - `.log.1` / `.log.*`
   - `.tmp`
@@ -87,7 +87,7 @@
   - `.dll`
   - `.exe`
   - `.msi`
-- [ ] 对复合扩展名做特殊处理，如 `app.log.1`。
+- [x] 对复合扩展名做特殊处理，如 `app.log.1`。
 
 验收标准：
 
@@ -98,12 +98,12 @@
 
 ### 2.1 新增扫描模式
 
-- [ ] `scanner.Config.ScanProfile string`，可选：
+- [x] `scanner.Config.ScanProfile string`，可选：
   - `normal`：当前默认行为。
   - `full_disk_fast`：全盘快速模式。
   - `deep`：深度扫描模式。
-- [ ] Web 增加“扫描模式”下拉。
-- [ ] CLI 增加 `-profile normal|full-disk-fast|deep`。
+- [x] Web 增加“扫描模式”下拉。
+- [x] CLI 增加 `-profile normal|full_disk_fast|deep`。
 
 模式建议：
 
@@ -121,12 +121,14 @@
 
 ### 2.2 增加跳过统计
 
-- [ ] `ScanStatistics` 增加：
+- [x] `ScanStatistics` 增加：
   - `SkippedFiles`
   - `SkippedDirs`
   - `SkippedByReason map[string]int`
-- [ ] `shouldScan` 返回跳过原因，而不是简单 bool。
-- [ ] Web 进度区显示跳过数量。
+- [x] `shouldScan` 返回跳过原因，而不是简单 bool。
+- [x] Web 进度区显示跳过数量。
+
+实现补充：JSON/Text 报告已输出跳过统计，后端统计会记录 `skipped_by_reason`。
 
 跳过原因建议：
 

@@ -60,6 +60,13 @@
     <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
   </div>
   <div style="margin-top:8px">
+    <label>扫描模式:
+      <select id="profile" onchange="applyProfilePreset()">
+        <option value="normal">普通</option>
+        <option value="full_disk_fast">全盘快速</option>
+        <option value="deep">深度</option>
+      </select>
+    </label>
     <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
     <label>最大文件(MB): <input type="number" id="maxsize" value="10" style="width:60px"></label>
     级别:
@@ -218,6 +225,7 @@ async function startScan() {
     path,
     recursive: document.getElementById('recursive').checked,
     max_size: parseInt(document.getElementById('maxsize').value) * 1024 * 1024,
+    profile: document.getElementById('profile').value,
     levels
   };
   document.getElementById('btnScan').disabled = true;
@@ -249,7 +257,9 @@ async function poll() {
       ? ` <span class="warn">（已截断 ${r.stats.truncated_count} 条，仅保留高优先级）</span>` : '';
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
-      `<span>已扫描: ${r.scanned}/${r.total||'?'}</span><span>问题: ${r.stats.total_issues}</span>${trunc}`;
+      `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
+      `<span>已跳过: ${(r.stats.skipped_files||0)} 文件 / ${(r.stats.skipped_dirs||0)} 目录</span>` +
+      `<span>问题: ${r.stats.total_issues}</span>${trunc}`;
     const now = Date.now();
     if (now - lastResultRefresh > 1000) {
       lastResultRefresh = now;
@@ -264,6 +274,17 @@ async function poll() {
     }
   } catch(e) {}
   setTimeout(poll, 500);
+}
+
+function applyProfilePreset() {
+  const profile = document.getElementById('profile').value;
+  const levels = [...document.querySelectorAll('.lvl')];
+  if (profile === 'full_disk_fast') {
+    levels.forEach(e => e.checked = e.value === 'critical' || e.value === 'high');
+    document.getElementById('maxsize').value = 10;
+  } else if (profile === 'deep') {
+    levels.forEach(e => e.checked = true);
+  }
 }
 
 async function loadPage(page) {

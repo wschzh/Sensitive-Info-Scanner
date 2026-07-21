@@ -174,6 +174,75 @@ func TestRemoveResultsForPaths(t *testing.T) {
 	}
 }
 
+func TestScanDirectorySkipsExcludedDirsAndPathKeywords(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite := func(rel, content string) {
+		t.Helper()
+		path := filepath.Join(dir, rel)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(filepath.Join("LOGS", "secret.txt"), "api_key: should_not_scan_1234567890\n")
+	mustWrite(filepath.Join("catalog", "keep.txt"), "api_key: should_scan_1234567890\n")
+
+	s := New(Config{})
+	s.ScanDirectory(dir, true)
+	stats := s.Stats()
+	if stats.ScannedFiles != 1 {
+		t.Fatalf("ScannedFiles=%d want 1", stats.ScannedFiles)
+	}
+	if stats.SkippedDirs == 0 {
+		t.Fatalf("SkippedDirs=0, want >0")
+	}
+	if stats.SkippedByReason[skipExcludedDir] == 0 {
+		t.Fatalf("skipExcludedDir count=0, want >0")
+	}
+	if stats.TotalIssues != 1 {
+		t.Fatalf("TotalIssues=%d want 1", stats.TotalIssues)
+	}
+}
+
+func TestShouldScanCompoundLogAndKeywordBoundary(t *testing.T) {
+	s := New(Config{})
+	if ok, reason := s.shouldScan(filepath.Join("C:", "work", "app.log.1")); ok || reason != skipExcludedExt {
+		t.Fatalf("app.log.1 should be excluded_ext, ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := s.shouldScan(filepath.Join("C:", "work", "catalog", "config.txt")); !ok || reason != "" {
+		t.Fatalf("catalog path should not be excluded, ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := s.shouldScan(filepath.Join("C:", "work", "cache", "config.txt")); ok || reason != skipExcludedPath {
+		t.Fatalf("cache segment should be excluded_path, ok=%v reason=%q", ok, reason)
+	}
+}
+
+func TestFullDiskFastProfileDefaults(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "secrets.txt"),
+		[]byte("https://example.com\napi_key: should_scan_1234567890\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "image.png"), []byte("not really an image"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{ScanProfile: ProfileFullDiskFast})
+	s.ScanDirectory(dir, false)
+	stats := s.Stats()
+	if stats.IssuesByLevel[types.Low] != 0 {
+		t.Fatalf("full_disk_fast should not scan low rules, got %d low issues", stats.IssuesByLevel[types.Low])
+	}
+	if stats.IssuesByLevel[types.Critical] != 1 {
+		t.Fatalf("critical issues=%d want 1", stats.IssuesByLevel[types.Critical])
+	}
+	if stats.SkippedByReason[skipProfileDisabled] != 1 {
+		t.Fatalf("profile disabled skips=%d want 1", stats.SkippedByReason[skipProfileDisabled])
+	}
+}
+
 // Stop 后 ScanDirectory 必须返回（不阻塞/不泄漏）。
 func TestStopReturns(t *testing.T) {
 	dir := t.TempDir()

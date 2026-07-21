@@ -84,7 +84,7 @@ func TestByLevel(t *testing.T) {
 }
 
 func TestExcludedDirCaseInsensitive(t *testing.T) {
-	for _, name := range []string{"LOGS", "Temp", "NODE_MODULES", "Dist"} {
+	for _, name := range []string{"LOGS", "Temp", "NODE_MODULES", "Dist", "Windows", "PROGRAMDATA", "Program Files (x86)"} {
 		if !IsExcludedDir(name) {
 			t.Errorf("目录 %q 应大小写不敏感地被排除", name)
 		}
@@ -92,9 +92,17 @@ func TestExcludedDirCaseInsensitive(t *testing.T) {
 }
 
 func TestExcludedNoiseExtensions(t *testing.T) {
-	for _, ext := range []string{".out", ".err", ".pid", ".dat"} {
+	for _, ext := range []string{".out", ".err", ".pid", ".dat", ".bak", ".cache", ".bin", ".dll", ".exe", ".msi"} {
 		if !IsExcludedExt(ext) {
 			t.Errorf("扩展名 %q 应被排除", ext)
+		}
+	}
+}
+
+func TestExcludedCompoundLogName(t *testing.T) {
+	for _, name := range []string{"app.log.1", "access.LOG.20260721"} {
+		if !IsExcludedFileName(name) {
+			t.Errorf("复合日志文件 %q 应被排除", name)
 		}
 	}
 }

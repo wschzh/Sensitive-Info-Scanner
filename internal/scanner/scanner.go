@@ -29,6 +29,22 @@ const (
 	minifiedLineThreshold       = 4096              // 单行超过此字节数视为压缩/编译产物，跳过（噪音）
 )
 
+const (
+	ProfileNormal       = "normal"
+	ProfileFullDiskFast = "full_disk_fast"
+	ProfileDeep         = "deep"
+)
+
+const (
+	skipExcludedDir     = "excluded_dir"
+	skipExcludedPath    = "excluded_path"
+	skipExcludedExt     = "excluded_ext"
+	skipUnsupportedExt  = "unsupported_ext"
+	skipTooLarge        = "too_large"
+	skipNonRegular      = "non_regular"
+	skipProfileDisabled = "profile_disabled"
+)
+
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
 type ResultFilter struct {
 	Level   types.Level // 空 = 全部级别
@@ -38,11 +54,14 @@ type ResultFilter struct {
 
 // Config 扫描配置。零值字段走合理默认，向后兼容。
 type Config struct {
-	MaxFileSize int64         // 最大文件大小（字节），0 = 默认 10MB
-	ScanLevels  []types.Level // 要扫描的级别，空 = 全部
-	Workers     int           // 并发 worker 数，0 = NumCPU（封顶 64）
-	MaxResults  int           // 内存保留的结果上限，0 = 默认 100000
-	KeepLevel   types.Level   // >= 该级别的结果永远保留（不受 MaxResults 限制），空 = Medium
+	MaxFileSize         int64         // 最大文件大小（字节），0 = 默认 10MB
+	ScanLevels          []types.Level // 要扫描的级别，空 = 全部
+	Workers             int           // 并发 worker 数，0 = NumCPU（封顶 64）
+	MaxResults          int           // 内存保留的结果上限，0 = 默认 100000
+	KeepLevel           types.Level   // >= 该级别的结果永远保留（不受 MaxResults 限制），空 = Medium
+	ScanProfile         string        // normal/full_disk_fast/deep，空 = normal
+	ExcludePathKeywords []string      // 路径分段关键词排除，空 = 默认 log/logs/cache/temp/tmp
+	DisableImages       bool          // 跳过图片/OCR 慢路径
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。
@@ -66,9 +85,30 @@ type Scanner struct {
 
 // New 创建扫描器。
 func New(cfg Config) *Scanner {
+	cfg = normalizeConfig(cfg)
 	ps := patterns.All()
 	if len(cfg.ScanLevels) > 0 {
 		ps = patterns.ByLevel(cfg.ScanLevels...)
+	}
+	single, cross := patterns.SplitCrossLine(ps)
+	return &Scanner{
+		cfg:      cfg,
+		patterns: ps,
+		single:   single,
+		cross:    cross,
+		stats:    types.NewScanStatistics(),
+	}
+}
+
+func normalizeConfig(cfg Config) Config {
+	if cfg.ScanProfile == "" {
+		cfg.ScanProfile = ProfileNormal
+	}
+	if cfg.ScanProfile == ProfileFullDiskFast {
+		if len(cfg.ScanLevels) == 0 {
+			cfg.ScanLevels = []types.Level{types.Critical, types.High}
+		}
+		cfg.DisableImages = true
 	}
 	if cfg.MaxFileSize <= 0 {
 		cfg.MaxFileSize = defaultMaxFileSize
@@ -88,14 +128,13 @@ func New(cfg Config) *Scanner {
 	if cfg.KeepLevel == "" {
 		cfg.KeepLevel = types.Medium
 	}
-	single, cross := patterns.SplitCrossLine(ps)
-	return &Scanner{
-		cfg:      cfg,
-		patterns: ps,
-		single:   single,
-		cross:    cross,
-		stats:    types.NewScanStatistics(),
+	if len(cfg.ExcludePathKeywords) == 0 {
+		cfg.ExcludePathKeywords = []string{"log", "logs", "cache", "temp", "tmp"}
 	}
+	for i, kw := range cfg.ExcludePathKeywords {
+		cfg.ExcludePathKeywords[i] = strings.ToLower(strings.TrimSpace(kw))
+	}
+	return cfg
 }
 
 // Results 返回内存内结果的拷贝（受 MaxResults 上限）。
@@ -209,7 +248,11 @@ func (s *Scanner) filterLocked(f ResultFilter) []types.ScanResult {
 func (s *Scanner) Stats() types.ScanStatistics {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.stats
+	stats := s.stats
+	stats.IssuesByLevel = copyLevelMap(s.stats.IssuesByLevel)
+	stats.TruncatedByLevel = copyLevelMap(s.stats.TruncatedByLevel)
+	stats.SkippedByReason = copyStringMap(s.stats.SkippedByReason)
+	return stats
 }
 
 // Progress 返回 (已扫描, 已发现, 当前文件)。total 扫描中实时增长，结束时等于 TotalFiles。
@@ -246,6 +289,14 @@ func (s *Scanner) reset() {
 func (s *Scanner) ScanSingle(path string) {
 	s.reset()
 	start := time.Now()
+	if ok, reason := s.shouldScan(path); !ok {
+		s.addSkipped(false, reason)
+		s.mu.Lock()
+		s.stats.TotalFiles = 0
+		s.stats.ScanDuration = time.Since(start).Seconds()
+		s.mu.Unlock()
+		return
+	}
 	s.discovered.Store(1)
 	s.mu.Lock()
 	s.stats.TotalFiles = 1
@@ -391,12 +442,21 @@ func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, file
 			}
 			if d.IsDir() {
 				if path != root && patterns.IsExcludedDir(d.Name()) {
+					s.addSkipped(true, skipExcludedDir)
+					return filepath.SkipDir
+				}
+				if path != root && s.pathHasExcludedKeyword(path) {
+					s.addSkipped(true, skipExcludedPath)
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if s.shouldScan(path) && !send(path) {
-				return filepath.SkipDir
+			if ok, reason := s.shouldScan(path); ok {
+				if !send(path) {
+					return filepath.SkipDir
+				}
+			} else {
+				s.addSkipped(false, reason)
 			}
 			return nil
 		})
@@ -410,8 +470,12 @@ func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, file
 				continue
 			}
 			p := filepath.Join(root, e.Name())
-			if s.shouldScan(p) && !send(p) {
-				return
+			if ok, reason := s.shouldScan(p); ok {
+				if !send(p) {
+					return
+				}
+			} else {
+				s.addSkipped(false, reason)
 			}
 		}
 	}
@@ -466,14 +530,16 @@ func isMinified(content string) bool {
 // readFile 按扩展名分流提取文本：xlsx/docx/pdf 走 extract 包，其余走多编码文本读取。
 func (s *Scanner) readFile(path string) (string, bool) {
 	ext := strings.ToLower(filepath.Ext(path))
-	if patterns.IsExcludedExt(ext) || !patterns.IsScannableExt(ext) {
+	if patterns.IsExcludedFileName(filepath.Base(path)) || !patterns.IsScannableExt(ext) {
 		return "", false
 	}
 	if fi, err := os.Stat(path); err == nil {
 		if !fi.Mode().IsRegular() {
+			s.addSkipped(false, skipNonRegular)
 			return "", false // 跳过设备/管道/套接字等非常规文件，避免 ReadFile 永久阻塞
 		}
 		if s.cfg.MaxFileSize > 0 && fi.Size() > s.cfg.MaxFileSize {
+			s.addSkipped(false, skipTooLarge)
 			return "", false
 		}
 	}
@@ -488,6 +554,10 @@ func (s *Scanner) readFile(path string) (string, bool) {
 		c, err := extract.PDF(path)
 		return c, err == nil
 	case ".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".gif", ".webp":
+		if s.cfg.DisableImages {
+			s.addSkipped(false, skipProfileDisabled)
+			return "", false
+		}
 		c, err := extract.Image(path)
 		return c, err == nil // 找不到 tesseract 时静默跳过
 	default:
@@ -592,7 +662,63 @@ func truncateRunes(s string, n int) string {
 	return string([]rune(s)[:n]) + "…"
 }
 
-func (s *Scanner) shouldScan(path string) bool {
+func (s *Scanner) shouldScan(path string) (bool, string) {
+	if s.pathHasExcludedKeyword(path) {
+		return false, skipExcludedPath
+	}
 	ext := strings.ToLower(filepath.Ext(path))
-	return patterns.IsScannableExt(ext) && !patterns.IsExcludedExt(ext)
+	if patterns.IsExcludedFileName(filepath.Base(path)) {
+		return false, skipExcludedExt
+	}
+	if !patterns.IsScannableExt(ext) {
+		return false, skipUnsupportedExt
+	}
+	return true, ""
+}
+
+func (s *Scanner) pathHasExcludedKeyword(path string) bool {
+	if len(s.cfg.ExcludePathKeywords) == 0 {
+		return false
+	}
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		lower := strings.ToLower(part)
+		for _, kw := range s.cfg.ExcludePathKeywords {
+			if kw != "" && lower == kw {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (s *Scanner) addSkipped(isDir bool, reason string) {
+	if reason == "" {
+		reason = "unknown"
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if isDir {
+		s.stats.SkippedDirs++
+	} else {
+		s.stats.SkippedFiles++
+	}
+	s.stats.SkippedByReason[reason]++
+}
+
+func copyLevelMap(in map[types.Level]int) map[types.Level]int {
+	out := make(map[types.Level]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+func copyStringMap(in map[string]int) map[string]int {
+	out := make(map[string]int, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }

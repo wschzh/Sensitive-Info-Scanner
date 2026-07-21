@@ -209,8 +209,9 @@ func IsScannableExt(ext string) bool { return scannableExt[ext] }
 var ExcludeDirs = []string{
 	".git", ".svn", ".hg", "node_modules", "__pycache__",
 	".vscode", ".idea", "bin", "obj", "dist", "build", "temp", "tmp",
-	"log", "logs",
-	"System Volume Information", "$Recycle.Bin",
+	"log", "logs", "cache", "target", ".gradle", ".m2", ".nuget",
+	"Windows", "Program Files", "Program Files (x86)", "ProgramData",
+	"System Volume Information", "$Recycle.Bin", "Recovery", "PerfLogs",
 }
 
 // excludeDirSet 排除目录名集合。
@@ -226,14 +227,34 @@ var excludeDirSet = func() map[string]bool {
 func IsExcludedDir(name string) bool { return excludeDirSet[strings.ToLower(name)] }
 
 // ExcludeExtensions 需排除的扩展名（原 .log$/.tmp$）。
-var ExcludeExtensions = []string{".log", ".tmp", ".out", ".err", ".pid", ".dat"}
+var ExcludeExtensions = []string{
+	".log", ".tmp", ".out", ".err", ".pid", ".dat",
+	".bak", ".cache", ".bin", ".dll", ".exe", ".msi",
+}
 
 // IsExcludedExt 扩展名是否在排除集合。
 func IsExcludedExt(ext string) bool {
 	for _, e := range ExcludeExtensions {
-		if e == ext {
+		if e == strings.ToLower(ext) {
 			return true
 		}
 	}
 	return false
+}
+
+// IsExcludedFileName 文件名是否命中排除规则，覆盖 app.log.1 / access.LOG.20260721 这类复合日志名。
+func IsExcludedFileName(name string) bool {
+	lower := strings.ToLower(name)
+	if IsExcludedExt(filepathExt(lower)) {
+		return true
+	}
+	return strings.Contains(lower, ".log.")
+}
+
+func filepathExt(name string) string {
+	i := strings.LastIndexByte(name, '.')
+	if i < 0 {
+		return ""
+	}
+	return name[i:]
 }

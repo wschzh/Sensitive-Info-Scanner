@@ -44,14 +44,17 @@ type ScanResult struct {
 
 // ScanStatistics 扫描统计。
 type ScanStatistics struct {
-	TotalFiles       int           `json:"total_files"`
-	ScannedFiles     int           `json:"scanned_files"`
-	FilesWithIssues  int           `json:"files_with_issues"`
-	TotalIssues      int           `json:"total_issues"`
-	IssuesByLevel    map[Level]int `json:"issues_by_level"`
-	ScanDuration     float64       `json:"scan_duration"`
-	TruncatedCount   int           `json:"truncated_count"`              // 因超 MaxResults 未保留的结果数
-	TruncatedByLevel map[Level]int `json:"truncated_by_level,omitempty"` // 各级别被截断的数量
+	TotalFiles       int            `json:"total_files"`
+	ScannedFiles     int            `json:"scanned_files"`
+	SkippedFiles     int            `json:"skipped_files"`
+	SkippedDirs      int            `json:"skipped_dirs"`
+	SkippedByReason  map[string]int `json:"skipped_by_reason,omitempty"`
+	FilesWithIssues  int            `json:"files_with_issues"`
+	TotalIssues      int            `json:"total_issues"`
+	IssuesByLevel    map[Level]int  `json:"issues_by_level"`
+	ScanDuration     float64        `json:"scan_duration"`
+	TruncatedCount   int            `json:"truncated_count"`              // 因超 MaxResults 未保留的结果数
+	TruncatedByLevel map[Level]int  `json:"truncated_by_level,omitempty"` // 各级别被截断的数量
 }
 
 // NewScanStatistics 构造一个初始化好 map 的统计结构。
@@ -59,5 +62,6 @@ func NewScanStatistics() ScanStatistics {
 	return ScanStatistics{
 		IssuesByLevel:    map[Level]int{},
 		TruncatedByLevel: map[Level]int{},
+		SkippedByReason:  map[string]int{},
 	}
 }
