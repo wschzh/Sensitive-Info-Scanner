@@ -61,6 +61,22 @@ func TestWindowsPathLazy(t *testing.T) {
 	}
 }
 
+// TestWindowsPathRejectsSingleSegment 收紧后：单层裸串（C:\temp / C:\logs）不应匹配，
+// 以减少代码、日志里的字面量误报；真实内部路径几乎都含至少两层目录。
+// 注意：两层及以上的字面量（如 C:\logs\app）仍会匹配——正则无法区分语义，
+// 进一步治理需上下文校验或误报样本，见 TODO 2.8。
+func TestWindowsPathRejectsSingleSegment(t *testing.T) {
+	p := FindByName("内部服务器路径")
+	if p == nil {
+		t.Fatal("未找到 Windows 路径模式")
+	}
+	for _, c := range []string{`C:\temp`, `路径 C:\logs 结尾`, `D:\`, `盘=C:x`} {
+		if p.RE().MatchString(c) {
+			t.Errorf("单层路径不应匹配，却命中 %q (pattern=%s)", c, p.Pattern)
+		}
+	}
+}
+
 func TestByLevel(t *testing.T) {
 	if got := len(ByLevel(types.Critical)); got != 3 {
 		t.Errorf("Critical 期望 3 条，实际 %d", got)

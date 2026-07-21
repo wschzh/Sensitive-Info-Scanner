@@ -75,6 +75,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/browse", s.handleBrowse)
 	mux.HandleFunc("/api/exit", s.handleExit)
 	mux.HandleFunc("/api/patterns", s.handlePatterns)
+	mux.HandleFunc("/api/delete", s.handleDelete)
 	return mux
 }
 
@@ -228,6 +229,62 @@ func (s *Server) handlePatterns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, map[string]any{"patterns": out})
+}
+
+// handleDelete 删除扫描结果中选中的文件（危险操作）。
+// 安全约束：仅允许删除「当前扫描结果集中出现过的路径」，且只删文件不删目录，
+// 防止前端伪造任意路径或误删整个目录。逐条返回结果，前端据此给出反馈。
+func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "仅支持 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Paths []string `json:"paths"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// 白名单：只允许删出现在当前结果集中的路径
+	allowed := make(map[string]bool)
+	for _, res := range s.scanner.Results() {
+		allowed[res.FilePath] = true
+	}
+
+	type delResult struct {
+		Path string `json:"path"`
+		OK   bool   `json:"ok"`
+		Err  string `json:"err,omitempty"`
+	}
+	out := make([]delResult, 0, len(req.Paths))
+	deleted := 0
+	for _, p := range req.Paths {
+		if p == "" {
+			continue
+		}
+		if !allowed[p] {
+			out = append(out, delResult{Path: p, OK: false, Err: "不在当前结果集中，已拒绝（安全限制）"})
+			continue
+		}
+		fi, err := os.Stat(p)
+		if err != nil {
+			out = append(out, delResult{Path: p, OK: false, Err: "路径不可访问: " + err.Error()})
+			continue
+		}
+		if fi.IsDir() {
+			out = append(out, delResult{Path: p, OK: false, Err: "是目录，拒绝删除（仅支持文件）"})
+			continue
+		}
+		if err := os.Remove(p); err != nil {
+			out = append(out, delResult{Path: p, OK: false, Err: err.Error()})
+			continue
+		}
+		out = append(out, delResult{Path: p, OK: true})
+		deleted++
+	}
+	writeJSON(w, map[string]any{"results": out, "deleted": deleted, "total": len(out)})
 }
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {

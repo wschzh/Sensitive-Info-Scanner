@@ -100,9 +100,11 @@
     </select>
     搜索:<input type="text" id="fsearch" size="22" placeholder="文件名 / 内容 / 匹配">
     <span id="fcount" class="muted"></span>
+    <button type="button" class="danger sm" id="btnDel" onclick="deleteSelected()" disabled style="margin-left:8px">删除选中</button>
+    <span id="selCount" class="muted"></span>
   </div>
   <table>
-    <thead><tr><th>级别</th><th>类型</th><th>文件</th><th>行</th><th>匹配内容</th></tr></thead>
+    <thead><tr><th style="width:28px;text-align:center"><input type="checkbox" id="selAll" onclick="toggleAll(this)" title="全选当前页"></th><th>级别</th><th>类型</th><th>文件</th><th>行</th><th>匹配内容</th></tr></thead>
     <tbody id="results"></tbody>
   </table>
   <div class="pager" id="pager"></div>
@@ -281,6 +283,7 @@ function renderResults() {
   for (const it of pageResults) {
     const tr = document.createElement('tr');
     tr.innerHTML =
+      `<td style="text-align:center"><input type="checkbox" class="row-sel" data-path="${escapeHtml(it.file_path)}"></td>` +
       `<td class="lv-${it.level}">${lvName[it.level]||it.level}</td>` +
       `<td>${escapeHtml(it.pattern_name)}</td>` +
       `<td class="muted" title="${escapeHtml(it.file_path)}">${escapeHtml(shortPath(it.file_path))}</td>` +
@@ -290,6 +293,9 @@ function renderResults() {
   }
   tbody.innerHTML = '';
   tbody.appendChild(frag);
+  const selAll = document.getElementById('selAll');
+  if (selAll) selAll.checked = false;
+  updateSelState();
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (curPage > pages) curPage = pages;
@@ -304,6 +310,56 @@ function renderResults() {
     `<span>第 ${curPage} / ${pages} 页</span>` +
     `<button class="sm" onclick="loadPage(${curPage-1})" ${curPage<=1?'disabled':''}>上一页</button>` +
     `<button class="sm" onclick="loadPage(${curPage+1})" ${curPage>=pages?'disabled':''}>下一页</button>`;
+}
+
+// ===== 结果选中 / 删除 =====
+document.getElementById('results').addEventListener('change', updateSelState);
+
+function toggleAll(master) {
+  document.querySelectorAll('.row-sel').forEach(b => b.checked = master.checked);
+  updateSelState();
+}
+
+function updateSelState() {
+  const boxes = document.querySelectorAll('.row-sel');
+  const checked = [...boxes].filter(b => b.checked);
+  document.getElementById('btnDel').disabled = checked.length === 0;
+  document.getElementById('selCount').textContent = checked.length > 0 ? `已选 ${checked.length} 个` : '';
+  const selAll = document.getElementById('selAll');
+  if (selAll) selAll.checked = boxes.length > 0 && checked.length === boxes.length;
+}
+
+async function deleteSelected() {
+  const paths = [...new Set([...document.querySelectorAll('.row-sel:checked')]
+    .map(b => b.dataset.path).filter(Boolean))];
+  if (paths.length === 0) return;
+  const preview = paths.slice(0, 5).join('\n') + (paths.length > 5 ? `\n…等共 ${paths.length} 个文件` : '');
+  if (!confirm(`⚠️ 确定删除以下 ${paths.length} 个文件？此操作不可恢复！\n\n${preview}`)) return;
+  try {
+    const res = await fetch('/api/delete', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({paths})
+    });
+    const data = await res.json();
+    const okCount = data.deleted || 0;
+    const failCount = (data.total || 0) - okCount;
+    // 本地即时移除已删除的行（后端结果集是扫描快照，不会因文件删除而自动更新）
+    const done = new Set((data.results || []).filter(r => r.ok).map(r => r.path));
+    if (done.size > 0) {
+      pageResults = pageResults.filter(it => !done.has(it.file_path));
+      total -= done.size;
+      renderResults();
+    }
+    if (failCount > 0) {
+      const failed = (data.results || []).filter(r => !r.ok)
+        .map(r => `${shortPath(r.path)}: ${r.err}`).join('\n');
+      alert(`删除完成：成功 ${okCount} 个，失败 ${failCount} 个。\n\n失败详情：\n${failed}`);
+    } else {
+      alert(`已删除 ${okCount} 个文件。`);
+    }
+  } catch (e) {
+    alert('删除请求失败: ' + e);
+  }
 }
 
 // ===== 目录选择器 =====

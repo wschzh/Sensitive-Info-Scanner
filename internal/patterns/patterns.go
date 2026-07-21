@@ -125,8 +125,8 @@ var all = compileAll([]Pattern{
 	{
 		Name:        "内部服务器路径",
 		Level:       types.Low,
-		Pattern:     `[A-Za-z]:\\[^<>:"|?*\r\n ]+`,
-		Description: "Windows文件路径（遇空格/引号停止）",
+		Pattern:     `[A-Za-z]:\\[^<>:"|?*\r\n \\]+\\[^<>:"|?*\r\n ]+`,
+		Description: "Windows文件路径（至少两层目录；遇空格/引号停止，过滤 C:\\temp 这类单层字面量误报）",
 		Examples:    []string{`C:\Users\Admin\Documents`},
 	},
 })
