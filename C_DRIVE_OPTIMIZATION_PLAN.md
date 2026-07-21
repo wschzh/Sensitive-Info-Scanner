@@ -185,11 +185,11 @@ go test -bench=Walk -benchmem ./internal/scanner
 
 ### 4.1 规则关键词预过滤
 
-- [ ] `patterns.Pattern` 增加 `Hints []string`。
-- [ ] 单行匹配前先检查 hints：
+- [x] `patterns.Pattern` 增加 `Hints []string`。
+- [x] 单行匹配前先检查 hints：
   - 有 hints：命中任意 hint 才运行正则。
   - 无 hints：保持当前行为。
-- [ ] 大小写不敏感规则预先 lower 文本片段。
+- [x] 大小写不敏感规则预先 lower 文本片段。
 
 建议 hints：
 
@@ -206,6 +206,12 @@ go test -bench=Walk -benchmem ./internal/scanner
 
 - 现有模式示例测试不回归。
 - 大量普通文本文件 benchmark 中正则调用次数明显下降。
+
+实现补充：已新增 `BenchmarkMatchContentNoHints` / `BenchmarkMatchContentWithHints`，本机验证命令：
+
+```bash
+go test -bench=MatchContent -benchmem ./internal/scanner
+```
 
 ### 4.2 数字类规则候选过滤
 

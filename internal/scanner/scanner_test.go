@@ -243,6 +243,38 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	}
 }
 
+func TestPatternHintsDoNotSkipMatches(t *testing.T) {
+	s := New(Config{})
+	content := strings.Join([]string{
+		"api_key: abc123def456ghi789",
+		"password: secret123",
+		"mail: user@example.com",
+		"url: https://www.example.com",
+		`path: C:\Users\Admin\Documents`,
+	}, "\n")
+	results := s.matchContent("hints.txt", content)
+	seen := map[string]bool{}
+	for _, r := range results {
+		seen[r.PatternName] = true
+	}
+	for _, want := range []string{"API密钥", "密码", "邮箱地址", "URL地址", "内部服务器路径"} {
+		if !seen[want] {
+			t.Fatalf("hint 预过滤后未命中 %s", want)
+		}
+	}
+}
+
+func TestPatternHintsSkipIrrelevantRules(t *testing.T) {
+	s := New(Config{})
+	results := s.matchContent("ordinary.txt", strings.Repeat("ordinary text with no markers\n", 20))
+	for _, r := range results {
+		switch r.PatternName {
+		case "API密钥", "密码", "邮箱地址", "URL地址", "内部服务器路径", "JWT令牌", "用户名", "数据库连接字符串", "私钥":
+			t.Fatalf("无 hint 文本不应命中带 hint 规则，却命中 %s", r.PatternName)
+		}
+	}
+}
+
 // Stop 后 ScanDirectory 必须返回（不阻塞/不泄漏）。
 func TestStopReturns(t *testing.T) {
 	dir := t.TempDir()

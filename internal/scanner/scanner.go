@@ -576,9 +576,13 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 	var results []types.ScanResult
 	now := time.Now()
 	lineStarts := computeLineStarts(content)
+	lowerContent := ""
 
 	// 单行模式：全文一次性匹配，用二分把匹配偏移换算成行号
 	for _, p := range s.single {
+		if !patternHintsMatch(content, &lowerContent, p.Hints, p.LowerHints()) {
+			continue
+		}
 		for _, loc := range p.RE().FindAllStringIndex(content, maxMatchesPerLine) {
 			start, end := loc[0], loc[1]
 			lineNum := sort.Search(len(lineStarts), func(i int) bool { return lineStarts[i] > start })
@@ -604,6 +608,9 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 
 	// 跨行模式：整段匹配，行号用匹配起点前的 \n 数计算，LineContent 截断
 	for _, p := range s.cross {
+		if !patternHintsMatch(content, &lowerContent, p.Hints, p.LowerHints()) {
+			continue
+		}
 		for _, loc := range p.RE().FindAllStringIndex(content, -1) {
 			lineNum := 1 + strings.Count(content[:loc[0]], "\n")
 			results = append(results, types.ScanResult{
@@ -618,6 +625,31 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 		}
 	}
 	return results
+}
+
+func patternHintsMatch(content string, lowerContent *string, hints, lowerHints []string) bool {
+	if len(hints) == 0 {
+		return true
+	}
+	for i, h := range hints {
+		if h == "" {
+			continue
+		}
+		if strings.Contains(content, h) {
+			return true
+		}
+		if lowerContent != nil && *lowerContent == "" {
+			*lowerContent = strings.ToLower(content)
+		}
+		lowerHint := strings.ToLower(h)
+		if i < len(lowerHints) {
+			lowerHint = lowerHints[i]
+		}
+		if lowerContent != nil && strings.Contains(*lowerContent, lowerHint) {
+			return true
+		}
+	}
+	return false
 }
 
 // computeLineStarts 返回每行起始字节偏移（第 1 行恒为 0），供 matchContent 二分算行号。

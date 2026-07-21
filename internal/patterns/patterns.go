@@ -20,12 +20,17 @@ type Pattern struct {
 	Level       types.Level
 	Description string
 	Examples    []string
-	CrossLine   bool // 是否需要跨行匹配（如私钥 -----BEGIN...END-----）
+	Hints       []string // 可选预过滤关键词；命中任意 hint 才运行正则，空则始终运行
+	CrossLine   bool     // 是否需要跨行匹配（如私钥 -----BEGIN...END-----）
 	re          *regexp.Regexp
+	lowerHints  []string
 }
 
 // RE 返回已编译的正则。
 func (p *Pattern) RE() *regexp.Regexp { return p.re }
+
+// LowerHints 返回预先小写化的 hints，供 scanner 做低成本预过滤。
+func (p *Pattern) LowerHints() []string { return p.lowerHints }
 
 // all 全部模式，启动时统一编译。
 var all = compileAll([]Pattern{
@@ -36,6 +41,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)-----BEGIN\s+(RSA\s+)?PRIVATE\s+KEY-----[\s\S]+?-----END\s+(RSA\s+)?PRIVATE\s+KEY-----`,
 		Description: "RSA私钥或其他加密私钥",
 		CrossLine:   true,
+		Hints:       []string{"PRIVATE KEY"},
 		Examples: []string{
 			"-----BEGIN RSA PRIVATE KEY-----\nMIIEpAIBAAKCAQEAbGcexample\n-----END RSA PRIVATE KEY-----",
 		},
@@ -46,6 +52,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)(?:api[_-]?key|apikey|api[_-]?secret|access[_-]?token|auth[_-]?token|secret[_-]?key|private[_-]?key)[\s:=]+["']?[a-zA-Z0-9_\-]{16,}["']?`,
 		Description: "各种API密钥和访问令牌",
 		Examples:    []string{"api_key: abc123def456ghi789"},
+		Hints:       []string{"api", "key", "secret", "token"},
 	},
 	{
 		Name:        "数据库连接字符串",
@@ -53,6 +60,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)(?:data[\s_-]*source|server|host)[\s=]+["']?[^\s"';]+["']?[\s;]*(?:user[\s_-]*id|uid|user)[\s=]+["']?[^\s"';]+["']?[\s;]*(?:password|pwd)[\s=]+["']?[^\s"';]+["']?`,
 		Description: "包含用户名和密码的数据库连接字符串",
 		Examples:    []string{"Data Source=localhost;User ID=admin;Password=secret123"},
+		Hints:       []string{"password", "pwd"},
 	},
 
 	// ---------------- High 高级 ----------------
@@ -76,6 +84,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)(?:password|passwd|pwd|pass)\s*[:=]\s*["']?[^\s"';]{6,}["']?`,
 		Description: "密码字段",
 		Examples:    []string{"password: secret123", `pwd="mypassword"`},
+		Hints:       []string{"password", "passwd", "pwd", "pass"},
 	},
 	{
 		Name:        "JWT令牌",
@@ -83,6 +92,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `eyJ[A-Za-z0-9_-]*\.eyJ[A-Za-z0-9_-]*\.[A-Za-z0-9_-]*`,
 		Description: "JWT认证令牌",
 		Examples:    []string{"eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSmeKKF2QT4fwpMeJf36POk6yJVadQssw5c"},
+		Hints:       []string{"eyJ"},
 	},
 
 	// ---------------- Medium 中级 ----------------
@@ -99,6 +109,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`,
 		Description: "电子邮件地址",
 		Examples:    []string{"user@example.com"},
+		Hints:       []string{"@"},
 	},
 	{
 		Name:        "IP地址",
@@ -115,6 +126,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)(?:username|user|login|userid)\s*[:=]\s*["']?[a-zA-Z0-9_\-]{3,}["']?`,
 		Description: "用户名字段",
 		Examples:    []string{"username: admin"},
+		Hints:       []string{"username", "user", "login", "userid"},
 	},
 	{
 		Name:        "URL地址",
@@ -122,6 +134,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)https?://[^\s<"']+`,
 		Description: "HTTP/HTTPS URL地址",
 		Examples:    []string{"https://www.example.com"},
+		Hints:       []string{"http://", "https://"},
 	},
 	{
 		Name:        "内部服务器路径",
@@ -129,6 +142,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `[A-Za-z]:\\[^<>:"|?*\r\n \\]+\\[^<>:"|?*\r\n ]+`,
 		Description: "Windows文件路径（至少两层目录；遇空格/引号停止，过滤 C:\\temp 这类单层字面量误报）",
 		Examples:    []string{`C:\Users\Admin\Documents`},
+		Hints:       []string{`:\`},
 	},
 })
 
@@ -136,6 +150,13 @@ func compileAll(ps []Pattern) []Pattern {
 	out := make([]Pattern, len(ps))
 	for i, p := range ps {
 		p.re = regexp.MustCompile(p.Pattern)
+		p.lowerHints = make([]string, 0, len(p.Hints))
+		for _, h := range p.Hints {
+			h = strings.TrimSpace(h)
+			if h != "" {
+				p.lowerHints = append(p.lowerHints, strings.ToLower(h))
+			}
+		}
 		out[i] = p
 	}
 	return out
