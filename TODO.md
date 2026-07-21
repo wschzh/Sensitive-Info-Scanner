@@ -186,3 +186,21 @@
   - [ ] `scanner.shouldScan`：支持「路径分段含 log/out 等关键字」免扫（分段检查、大小写不敏感）
   - [ ] （依赖 1.5 持久化层）`scanRequest` + `Config` 加 `ExcludeGlobs []string` / `ExcludeKeywords []string`，前端扫描配置区加白名单输入框
   - **涉及**：`internal/patterns/patterns.go`、`internal/scanner/scanner.go`、（可选）`internal/web/server.go`、`internal/web/index.html`
+
+### 2.11 [下版本] 旧版 Excel `.xls` 精准解析或明确跳过
+
+- **现状**：`.xls` 在 `FileCategories["data"]` 可扫描列表里，但当前 `extract` 只实现了 `.xlsx`；`.xls` 会落到默认文本读取路径，把二进制内容当文本解码后跑正则，容易漏掉真实单元格内容，也可能产生乱码和误报。
+- **决策项**：
+  - [ ] 方案 A：接入支持 BIFF `.xls` 的解析库，提取单元格文本后进入统一规则匹配。
+  - [ ] 方案 B：在全盘快速模式默认跳过 `.xls`，并在 Web/报告中提示“旧版 xls 暂不支持精准解析”；自定义扫描可保留开关。
+- **建议**：优先方案 B 降噪保守处理；下个大版本再评估方案 A 的依赖体积、跨平台兼容和解析准确性。
+- **涉及**：`internal/extract/`、`internal/scanner/scanner.go`、`internal/patterns/patterns.go`、`internal/web/index.html`
+
+### 2.12 [下版本] 旧版 Word `.doc` 精准解析或策略化处理
+
+- **现状**：`.docx` 已通过解压 `word/document.xml` 精准提取文本；旧版 `.doc` 仍在可扫描列表中，但没有专门解析器，会按普通文本读取二进制内容，结果不可靠。测试中 `.doc/.docx` 不是唯一卡顿原因，但 `.doc` 的支持语义需要明确。
+- **决策项**：
+  - [ ] 方案 A：接入旧版 Word `.doc` 解析能力，提取正文文本后进入统一规则匹配。
+  - [ ] 方案 B：在全盘快速模式默认跳过 `.doc`，自定义扫描里提供“扫描旧版 Word（可能较慢/误报）”开关。
+- **建议**：不要无提示地把 `.doc` 当普通文本扫；下版本至少应实现方案 B 的显式策略和提示。
+- **涉及**：`internal/extract/`、`internal/scanner/scanner.go`、`internal/patterns/patterns.go`、`internal/web/index.html`
