@@ -152,7 +152,7 @@
 - [x] 新增 `scanner.Config.WalkEngine string`：
   - `std`
   - `fastwalk`
-- [x] 初期默认仍为 `std`，Web/CLI 可开启 `fastwalk`。
+- [x] 初期默认仍为 `std`；Web 显示为“标准/快速”，CLI 可开启 `fastwalk`。
 - [ ] Windows 下重点测试权限错误、符号链接、junction、长路径。
 
 验收标准：

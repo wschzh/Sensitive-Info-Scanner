@@ -67,10 +67,10 @@
         <option value="deep">深度</option>
       </select>
     </label>
-    <label>遍历引擎:
+    <label>扫描速度:
       <select id="walkEngine">
         <option value="std">标准</option>
-        <option value="fastwalk">fastwalk</option>
+        <option value="fastwalk">快速</option>
       </select>
     </label>
     <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
@@ -81,7 +81,7 @@
     <label><input type="checkbox" class="lvl" value="medium">中级</label>
     <label><input type="checkbox" class="lvl" value="low">低级</label>
   </div>
-  <div class="muted" style="margin-top:6px">💡 扫描大批量文件（尤其是日志或软件安装目录）时，建议只勾「严重」「高级」——日志里的 IP/URL/手机号等会产生大量误报。</div>
+  <div class="muted" style="margin-top:6px">💡 扫描大批量文件（尤其是日志或软件安装目录）时，建议选择「全盘快速」或「快速」，并只勾「严重」「高级」；「标准」兼容性更稳，「快速」更适合全盘和大目录。</div>
   <div style="margin-top:10px">
     <button id="btnScan" onclick="startScan()">开始扫描</button>
     <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
