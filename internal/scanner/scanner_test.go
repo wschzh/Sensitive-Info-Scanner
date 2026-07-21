@@ -401,6 +401,48 @@ func TestNumericCandidateFilterSkipsImpossibleText(t *testing.T) {
 	}
 }
 
+func TestBankCardRequiresLuhnAndPrefersUnionPay(t *testing.T) {
+	s := New(Config{})
+	content := strings.Join([]string{
+		"unionpay16: 6222020000000007",
+		"unionpay19: 6217000000000000004",
+		"visa: 4111111111111111",
+		"bad_check_digit: 6222020000000008",
+		"random_digits: 1234567890123456",
+	}, "\n")
+	results := s.matchContent("cards.txt", content)
+
+	got := map[string]bool{}
+	for _, r := range results {
+		if r.PatternName == "银行卡号" {
+			got[r.MatchedText] = true
+		}
+	}
+	for _, want := range []string{"6222020000000007", "6217000000000000004", "4111111111111111"} {
+		if !got[want] {
+			t.Fatalf("应命中通过 Luhn 的银行卡号 %s，实际=%v", want, got)
+		}
+	}
+	for _, bad := range []string{"6222020000000008", "1234567890123456"} {
+		if got[bad] {
+			t.Fatalf("不应命中未通过规则/Luhn 的银行卡号 %s", bad)
+		}
+	}
+}
+
+func TestValidLuhn(t *testing.T) {
+	for _, card := range []string{"6222020000000007", "6217000000000000004", "4111111111111111"} {
+		if !validLuhn(card) {
+			t.Fatalf("%s should pass Luhn", card)
+		}
+	}
+	for _, card := range []string{"6222020000000008", "4111111111111112", "abcd"} {
+		if validLuhn(card) {
+			t.Fatalf("%s should fail Luhn", card)
+		}
+	}
+}
+
 // Stop 后 ScanDirectory 必须返回（不阻塞/不泄漏）。
 func TestStopReturns(t *testing.T) {
 	dir := t.TempDir()

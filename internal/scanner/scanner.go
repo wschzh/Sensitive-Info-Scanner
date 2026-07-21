@@ -771,6 +771,10 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 		}
 		for _, loc := range p.RE().FindAllStringIndex(content, maxMatchesPerLine) {
 			start, end := loc[0], loc[1]
+			matched := content[start:end]
+			if !validPatternMatch(p.Name, matched) {
+				continue
+			}
 			lineNum := sort.Search(len(lineStarts), func(i int) bool { return lineStarts[i] > start })
 			if lineNum == 0 {
 				lineNum = 1
@@ -786,7 +790,7 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 				Level:       p.Level,
 				LineNumber:  lineNum,
 				LineContent: contextAround(content[ls:le], start-ls, end-ls, lineContextPad),
-				MatchedText: content[start:end],
+				MatchedText: matched,
 				Timestamp:   now,
 			})
 		}
@@ -811,6 +815,37 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 		}
 	}
 	return results
+}
+
+func validPatternMatch(patternName, matched string) bool {
+	if patternName == "银行卡号" {
+		return validLuhn(matched)
+	}
+	return true
+}
+
+func validLuhn(s string) bool {
+	if len(s) == 0 {
+		return false
+	}
+	sum := 0
+	double := false
+	for i := len(s) - 1; i >= 0; i-- {
+		c := s[i]
+		if c < '0' || c > '9' {
+			return false
+		}
+		n := int(c - '0')
+		if double {
+			n *= 2
+			if n > 9 {
+				n -= 9
+			}
+		}
+		sum += n
+		double = !double
+	}
+	return sum%10 == 0
 }
 
 func patternCandidateMatch(content string, lowerContent *string, digitCount *int, p patterns.Pattern) bool {
