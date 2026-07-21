@@ -26,6 +26,7 @@ const (
 	defaultMaxFileSize    int64 = 10 * 1024 * 1024
 	defaultMaxTextSize    int   = 50 * 1024 * 1024
 	fullDiskMaxTextSize         = 8 * 1024 * 1024
+	fullDiskMaxRichSize   int64 = 2 * 1024 * 1024
 	defaultMaxResults           = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
 	maxWorkers                  = 64
 	maxRecentEvents             = 80
@@ -59,6 +60,7 @@ const (
 	skipTimeout         = "timeout"
 	skipTimeoutBacklog  = "timeout_backlog"
 	skipTextTooLarge    = "text_too_large"
+	skipRichTooLarge    = "rich_too_large"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -81,6 +83,7 @@ type Config struct {
 	DisableImages       bool          // 跳过图片/OCR 慢路径
 	PerFileTimeout      time.Duration // 单文件超时，0 = 默认 120s；full_disk_fast 默认 30s
 	MaxTextSize         int           // 提取后文本上限（字节），0 = 默认 50MB；full_disk_fast 默认 8MB
+	MaxRichFileSize     int64         // Office/PDF 富文档原文件上限，0 = 不单独限制；full_disk_fast 默认 2MB
 }
 
 // Scanner 敏感信息扫描器（并发安全，供 CLI 与 Web GUI 共用）。
@@ -160,6 +163,9 @@ func normalizeConfig(cfg Config) Config {
 		}
 		if cfg.MaxTextSize <= 0 {
 			cfg.MaxTextSize = fullDiskMaxTextSize
+		}
+		if cfg.MaxRichFileSize <= 0 {
+			cfg.MaxRichFileSize = fullDiskMaxRichSize
 		}
 	}
 	if cfg.PerFileTimeout <= 0 {
@@ -533,14 +539,17 @@ func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) 
 	ch := make(chan result, 1)
 	start := time.Now()
 	go func() {
+		var out []types.ScanResult
 		defer func() {
 			<-s.scanSlots
 			if v := recover(); v != nil {
 				diag.Printf("scan panic worker=%d seconds=%d path=%q panic=%v stack=%s",
 					worker, int(time.Since(start).Seconds()), path, v, string(debug.Stack()))
+				out = nil
 			}
+			ch <- result{out}
 		}() // 防个别文件触发 panic 拖垮整个 worker
-		ch <- result{s.ScanFile(path)}
+		out = s.ScanFile(path)
 	}()
 	timer := time.NewTimer(s.cfg.PerFileTimeout)
 	defer timer.Stop()
@@ -737,6 +746,10 @@ func (s *Scanner) readFile(path string) (string, bool) {
 			s.addSkipped(false, skipTooLarge)
 			return "", false
 		}
+		if s.cfg.MaxRichFileSize > 0 && isRichDocumentExt(ext) && fi.Size() > s.cfg.MaxRichFileSize {
+			s.addSkipped(false, skipRichTooLarge)
+			return "", false
+		}
 	}
 	switch ext {
 	case ".xlsx":
@@ -761,6 +774,15 @@ func (s *Scanner) readFile(path string) (string, bool) {
 			return "", false
 		}
 		return s.limitExtractedText(decodeText(raw), nil)
+	}
+}
+
+func isRichDocumentExt(ext string) bool {
+	switch ext {
+	case ".pdf", ".docx", ".xlsx", ".doc", ".xls", ".rtf", ".odt", ".accdb":
+		return true
+	default:
+		return false
 	}
 }
 

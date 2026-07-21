@@ -339,6 +339,9 @@ func TestFullDiskFastProfileDefaults(t *testing.T) {
 	if s.cfg.MaxTextSize != fullDiskMaxTextSize {
 		t.Fatalf("full_disk_fast MaxTextSize=%d want %d", s.cfg.MaxTextSize, fullDiskMaxTextSize)
 	}
+	if s.cfg.MaxRichFileSize != fullDiskMaxRichSize {
+		t.Fatalf("full_disk_fast MaxRichFileSize=%d want %d", s.cfg.MaxRichFileSize, fullDiskMaxRichSize)
+	}
 }
 
 func TestPatternHintsDoNotSkipMatches(t *testing.T) {
@@ -416,6 +419,21 @@ func TestReadFileSkipsExtractedTextTooLarge(t *testing.T) {
 	}
 	if got := s.Stats().SkippedByReason[skipTextTooLarge]; got != 1 {
 		t.Fatalf("text_too_large skips=%d want 1", got)
+	}
+}
+
+func TestReadFileSkipsRichDocumentTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "large.pdf")
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", 64)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	s := New(Config{MaxFileSize: 1024, MaxRichFileSize: 16})
+	if content, ok := s.readFile(path); ok || content != "" {
+		t.Fatalf("large rich document should be skipped before extraction, ok=%v len=%d", ok, len(content))
+	}
+	if got := s.Stats().SkippedByReason[skipRichTooLarge]; got != 1 {
+		t.Fatalf("rich_too_large skips=%d want 1", got)
 	}
 }
 

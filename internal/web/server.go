@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -121,6 +122,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path 不能为空", http.StatusBadRequest)
 		return
 	}
+	cfg := scanConfig(req, paths)
 
 	s.mu.Lock()
 	if s.scanning {
@@ -128,14 +130,7 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "已有扫描在进行", http.StatusConflict)
 		return
 	}
-	sc := scanner.New(scanner.Config{
-		MaxFileSize: req.MaxSize,
-		ScanLevels:  req.Levels,
-		Workers:     req.Workers,
-		MaxResults:  req.MaxResults,
-		ScanProfile: req.Profile,
-		WalkEngine:  req.WalkEngine,
-	})
+	sc := scanner.New(cfg)
 	s.scanner = sc
 	s.scanning = true
 	s.mu.Unlock()
@@ -162,6 +157,47 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func scanConfig(req scanRequest, paths []string) scanner.Config {
+	profile := req.Profile
+	workers := req.Workers
+	timeout := time.Duration(0)
+	maxTextSize := 0
+	maxRichSize := int64(0)
+	if isBroadRootScan(paths) {
+		profile = scanner.ProfileFullDiskFast
+		workers = 4
+		timeout = 30 * time.Second
+		maxTextSize = 4 * 1024 * 1024
+		maxRichSize = 2 * 1024 * 1024
+	}
+	return scanner.Config{
+		MaxFileSize:     req.MaxSize,
+		ScanLevels:      req.Levels,
+		Workers:         workers,
+		MaxResults:      req.MaxResults,
+		ScanProfile:     profile,
+		WalkEngine:      req.WalkEngine,
+		PerFileTimeout:  timeout,
+		MaxTextSize:     maxTextSize,
+		MaxRichFileSize: maxRichSize,
+	}
+}
+
+func isBroadRootScan(paths []string) bool {
+	for _, p := range paths {
+		clean := filepath.Clean(p)
+		vol := filepath.VolumeName(clean)
+		if vol == "" {
+			continue
+		}
+		rest := strings.TrimPrefix(clean, vol)
+		if rest == "." || rest == string(filepath.Separator) || rest == `\` || rest == `/` {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
