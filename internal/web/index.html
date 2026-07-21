@@ -8,11 +8,12 @@
   h1 { font-size: 20px; }
   .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   label { display: inline-block; margin-right: 8px; }
-  input[type=text], input[type=number] { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+  input[type=text], input[type=number], select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
   button { padding: 8px 16px; border: none; border-radius: 4px; background: #3498db; color: #fff; cursor: pointer; margin-right: 8px; }
   button:disabled { background: #aaa; cursor: not-allowed; }
   button.danger { background: #e74c3c; }
   button.ghost { background: #7f8c8d; }
+  button.sm { padding: 4px 10px; margin: 0 4px; }
   .progress { width: 100%; height: 18px; background: #eee; border-radius: 9px; overflow: hidden; }
   .progress-bar { height: 100%; background: #3498db; transition: width .2s; width: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -24,16 +25,25 @@
   .lv-low { color: #3498db; }
   .stats span { margin-right: 16px; }
   .muted { color: #888; font-size: 12px; }
+  .toolbar { margin-bottom: 10px; padding: 8px; background: #fafafa; border-radius: 6px; font-size: 13px; }
+  .toolbar select { margin: 0 4px; }
+  .pager { margin-top: 10px; text-align: center; color: #666; font-size: 13px; }
+  .modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.4); z-index: 100; }
+  .modal.open { display: flex; align-items: center; justify-content: center; }
+  .modal-card { background: #fff; border-radius: 8px; padding: 16px; width: 480px; max-width: 92vw; box-shadow: 0 4px 20px rgba(0,0,0,.2); display: flex; flex-direction: column; }
+  .modal-title { font-size: 15px; font-weight: bold; margin-bottom: 8px; }
+  .browser-list { overflow: auto; max-height: 50vh; border: 1px solid #eee; border-radius: 4px; }
+  .browser-item { padding: 6px 10px; cursor: pointer; font-size: 13px; }
+  .browser-item:hover { background: #eef5fb; }
 </style>
 </head>
 <body>
-<div style="display:flex;justify-content:space-between;align-items:center">
-  <h1>🔍 敏感信息扫描工具</h1>
-  <span style="color:#999;font-size:13px">powered by cz</span>
-</div>
+<h1>🔍 敏感信息扫描工具</h1>
 
 <div class="card">
-  <div><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label></div>
+  <div><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
+    <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
+  </div>
   <div style="margin-top:8px">
     <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
     <label>最大文件(MB): <input type="number" id="maxsize" value="10" style="width:60px"></label>
@@ -57,14 +67,60 @@
 </div>
 
 <div class="card">
+  <!-- 扫描后的结果过滤：级别 / 类型 / 关键字，纯前端筛选不重扫 -->
+  <div class="toolbar">
+    级别:
+    <label><input type="radio" name="flevel" value="all" checked>全部</label>
+    <label><input type="radio" name="flevel" value="critical">严重</label>
+    <label><input type="radio" name="flevel" value="high">高级</label>
+    <label><input type="radio" name="flevel" value="medium">中级</label>
+    <label><input type="radio" name="flevel" value="low">低级</label>
+    类型:<select id="ftype"><option value="all">全部</option></select>
+    搜索:<input type="text" id="fsearch" size="22" placeholder="文件名 / 内容 / 匹配">
+    <span id="fcount" class="muted"></span>
+  </div>
   <table>
     <thead><tr><th>级别</th><th>类型</th><th>文件</th><th>行</th><th>匹配内容</th></tr></thead>
     <tbody id="results"></tbody>
   </table>
+  <div class="pager" id="pager"></div>
+</div>
+
+<div style="text-align:center;color:#999;font-size:13px;padding:8px 0 4px">powered by cz</div>
+
+<!-- 目录选择弹层：懒加载子目录，点「选择此目录」回填绝对路径到 #path -->
+<div id="browser" class="modal">
+  <div class="modal-card">
+    <div class="modal-title">选择目录
+      <button type="button" class="ghost sm" style="float:right" onclick="closeBrowser()">✕</button>
+    </div>
+    <div id="browserPath" class="muted" style="margin:6px 0;word-break:break-all"></div>
+    <div id="browserList" class="browser-list"></div>
+    <div style="margin-top:10px;text-align:right">
+      <button type="button" class="ghost" onclick="closeBrowser()">取消</button>
+      <button type="button" onclick="pickDir()">选择此目录</button>
+    </div>
+  </div>
 </div>
 
 <script>
+const lvName = {critical:'严重', high:'高级', medium:'中级', low:'低级'};
+const PAGE_SIZE = 200; // 每页渲染条数，避免大结果集一次性 innerHTML 卡顿
+
 let scanning = false;
+let allResults = [];   // 后端返回的全量结果，筛选/分页都基于此（不重扫）
+let pollCount = 0;
+// 当前筛选条件
+let filterLevel = 'all';
+let filterType = 'all';
+let filterKeyword = '';
+let curPage = 1;
+
+// 绑定筛选事件：任一条件变化都回到第 1 页重渲染
+document.querySelectorAll('input[name=flevel]').forEach(r =>
+  r.addEventListener('change', () => { filterLevel = r.value; curPage = 1; renderResults(); }));
+document.getElementById('ftype').addEventListener('change', e => { filterType = e.target.value; curPage = 1; renderResults(); });
+document.getElementById('fsearch').addEventListener('input', e => { filterKeyword = e.target.value.trim(); curPage = 1; renderResults(); });
 
 async function startScan() {
   const path = document.getElementById('path').value.trim();
@@ -80,8 +136,11 @@ async function startScan() {
   const res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) { document.getElementById('btnScan').disabled = false; alert(await res.text()); return; }
   scanning = true;
+  pollCount = 0;
+  allResults = [];
+  curPage = 1;
+  renderResults();
   document.getElementById('btnStop').disabled = false;
-  document.getElementById('results').innerHTML = '';
   poll();
 }
 
@@ -93,43 +152,166 @@ async function poll() {
     const r = await (await fetch('/api/progress')).json();
     document.getElementById('bar').style.width = r.progress + '%';
     document.getElementById('stats').innerHTML =
-      `<span>进度: ${r.progress}%</span><span class="muted">${r.current_file||''}</span>` +
+      `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.stats.scanned_files}/${r.stats.total_files}</span><span>问题: ${r.stats.total_issues}</span>`;
+    // 扫描中每 ~1s（每 3 次 poll）增量拉一次结果实时刷新表格；后端 Results() 并发安全
+    pollCount++;
+    if (pollCount % 3 === 0) {
+      await loadResults();
+    }
     if (!r.scanning) {
       scanning = false;
       document.getElementById('btnScan').disabled = false;
       document.getElementById('btnStop').disabled = true;
       await loadResults();
+      if (allResults.length === 0) {
+        document.getElementById('stats').innerHTML += ' — 未发现敏感信息';
+      }
       return;
     }
   } catch(e) {}
   setTimeout(poll, 300);
 }
 
+// 拉取全量结果并按当前筛选渲染（不改筛选条件，扫描中增量调用安全）
 async function loadResults() {
   const r = await (await fetch('/api/results')).json();
+  allResults = r.results || [];
+  refreshTypeOptions();
+  renderResults();
+}
+
+// 类型下拉按当前结果动态填充（去重 + 保留已选值）
+function refreshTypeOptions() {
+  const sel = document.getElementById('ftype');
+  const types = [...new Set(allResults.map(r => r.pattern_name))].sort();
+  const keep = filterType;
+  sel.innerHTML = '<option value="all">全部</option>' + types.map(t => `<option value="${escapeHtml(t)}">${escapeHtml(t)}</option>`).join('');
+  filterType = [...sel.options].some(o => o.value === keep) ? keep : 'all';
+  sel.value = filterType;
+}
+
+function getFiltered() {
+  const kw = filterKeyword.toLowerCase();
+  return allResults.filter(it => {
+    if (filterLevel !== 'all' && it.level !== filterLevel) return false;
+    if (filterType !== 'all' && it.pattern_name !== filterType) return false;
+    if (kw) {
+      const hay = ((it.file_path||'') + ' ' + (it.matched_text||'') + ' ' + (it.line_content||'')).toLowerCase();
+      if (!hay.includes(kw)) return false;
+    }
+    return true;
+  });
+}
+
+// 分页 + DocumentFragment 批量插入，避免几千条一次性 innerHTML 卡顿
+function renderResults() {
+  const filtered = getFiltered();
+  const total = filtered.length;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (curPage > pages) curPage = pages;
+  if (curPage < 1) curPage = 1;
+  const start = (curPage - 1) * PAGE_SIZE;
+  const slice = filtered.slice(start, start + PAGE_SIZE);
+
   const tbody = document.getElementById('results');
-  tbody.innerHTML = '';
-  const lvName = {critical:'严重', high:'高级', medium:'中级', low:'低级'};
-  for (const it of r.results) {
+  const frag = document.createDocumentFragment();
+  for (const it of slice) {
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td class="lv-${it.level}">${lvName[it.level]||it.level}</td>` +
-      `<td>${it.pattern_name}</td>` +
-      `<td class="muted" title="${escapeHtml(it.file_path)}">${shortPath(it.file_path)}</td>` +
+      `<td>${escapeHtml(it.pattern_name)}</td>` +
+      `<td class="muted" title="${escapeHtml(it.file_path)}">${escapeHtml(shortPath(it.file_path))}</td>` +
       `<td>${it.line_number}</td>` +
       `<td>${escapeHtml(it.matched_text)}</td>`;
-    tbody.appendChild(tr);
+    frag.appendChild(tr);
   }
-  if (r.results.length === 0) {
-    document.getElementById('stats').innerHTML += ' — 未发现敏感信息';
+  tbody.innerHTML = '';
+  tbody.appendChild(frag);
+
+  document.getElementById('fcount').textContent = `当前 ${total} / 共 ${allResults.length} 条`;
+
+  const pager = document.getElementById('pager');
+  if (total === 0) {
+    pager.innerHTML = '<span class="muted">无匹配结果</span>';
+    return;
+  }
+  pager.innerHTML =
+    `<span>第 ${curPage} / ${pages} 页</span>` +
+    `<button class="sm" onclick="goPage(${curPage-1})" ${curPage<=1?'disabled':''}>上一页</button>` +
+    `<button class="sm" onclick="goPage(${curPage+1})" ${curPage>=pages?'disabled':''}>下一页</button>`;
+}
+
+function goPage(p) { curPage = p; renderResults(); }
+
+function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
+function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
+function escapeHtml(s) {
+  return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+// ===== 目录选择器（懒加载子目录，回填绝对路径到 #path）=====
+let browserCurPath = '';
+
+async function openBrowser() {
+  document.getElementById('browser').classList.add('open');
+  // 从路径框当前值起始，便于就近浏览；为空则从根入口（盘符 / 根目录）开始
+  browserCurPath = document.getElementById('path').value.trim();
+  await loadBrowser();
+}
+
+function closeBrowser() {
+  document.getElementById('browser').classList.remove('open');
+}
+
+async function loadBrowser() {
+  const list = document.getElementById('browserList');
+  list.innerHTML = '<div class="muted" style="padding:10px">加载中…</div>';
+  let r;
+  try {
+    r = await (await fetch('/api/browse?path=' + encodeURIComponent(browserCurPath))).json();
+  } catch (e) {
+    list.innerHTML = '<div class="muted" style="padding:10px">请求失败: ' + escapeHtml(String(e)) + '</div>';
+    return;
+  }
+  document.getElementById('browserPath').textContent = r.path || '（选择起始位置）';
+  list.innerHTML = '';
+  // 返回上级（error 状态下也保留，便于退出）
+  if (r.parent) {
+    const up = document.createElement('div');
+    up.className = 'browser-item';
+    up.textContent = '📁 ..';
+    up.onclick = () => { browserCurPath = r.parent; loadBrowser(); };
+    list.appendChild(up);
+  }
+  if (r.error) {
+    const d = document.createElement('div');
+    d.className = 'muted'; d.style.padding = '10px';
+    d.textContent = r.error;
+    list.appendChild(d);
+  }
+  const dirs = (r.entries || []).filter(e => e.is_dir);
+  for (const e of dirs) {
+    const div = document.createElement('div');
+    div.className = 'browser-item';
+    div.textContent = '📁 ' + e.name;
+    div.onclick = () => { browserCurPath = e.path; loadBrowser(); };
+    div.ondblclick = () => { browserCurPath = e.path; pickDir(); }; // 双击直接选中
+    list.appendChild(div);
+  }
+  if (!r.error && dirs.length === 0) {
+    const d = document.createElement('div');
+    d.className = 'muted'; d.style.padding = '10px';
+    d.textContent = '无子目录';
+    list.appendChild(d);
   }
 }
 
-function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
-function shortPath(p) { return p.length <= 50 ? p : '…' + p.slice(-49); }
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+function pickDir() {
+  if (browserCurPath) {
+    document.getElementById('path').value = browserCurPath;
+  }
+  closeBrowser();
 }
 </script>
 </body>

@@ -1,6 +1,7 @@
 package scanner
 
 import (
+	"bytes"
 	"unicode/utf8"
 
 	"golang.org/x/text/encoding/charmap"
@@ -10,6 +11,9 @@ import (
 // decodeText 多编码解码链：UTF-8 优先，失败依次尝试 GBK、GB18030，最后 Latin-1 兜底。
 // 对齐原 Python scanner 的 ['utf-8','gbk','gb2312','latin-1'] 尝试顺序（GB18030 是 GBK/GB2312 超集）。
 func decodeText(raw []byte) string {
+	// 先剥离 UTF-8 BOM：带 BOM 的文件 utf8.Valid 为真，会落入下面的分支把 BOM(3 字节) 当作正文，
+	// 导致首行匹配的行内容前缀出现乱码、字节偏移轻微错位。GBK/GB18030 文件不含此 BOM，剥离无副作用。
+	raw = bytes.TrimPrefix(raw, []byte{0xEF, 0xBB, 0xBF})
 	if len(raw) == 0 {
 		return ""
 	}

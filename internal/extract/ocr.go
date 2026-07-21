@@ -1,12 +1,18 @@
 package extract
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"time"
 )
+
+// ocrTimeout 单张图片 OCR 的最长执行时间。损坏 / 超大图片可能让 tesseract hang 住，
+// 用超时 + CommandContext 在到期后杀掉子进程，避免卡死扫描 goroutine。
+const ocrTimeout = 60 * time.Second
 
 // ErrNoTesseract 表示未找到 tesseract 引擎，上层应静默跳过图片。
 var ErrNoTesseract = errors.New("未找到 tesseract OCR 引擎，已跳过图片扫描")
@@ -73,8 +79,11 @@ func Image(path string) (string, error) {
 }
 
 // runTesseract 调用 tesseract <image> stdout -l <lang>，返回识别文本。
+// 超时（ocrTimeout）后自动杀掉子进程并返回错误，上层 Image 静默跳过该图。
 func runTesseract(bin, image, lang string) (string, error) {
-	cmd := exec.Command(bin, image, "stdout", "-l", lang)
+	ctx, cancel := context.WithTimeout(context.Background(), ocrTimeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, bin, image, "stdout", "-l", lang)
 	out, err := cmd.Output()
 	if err != nil {
 		return "", err

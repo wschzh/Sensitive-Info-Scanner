@@ -38,17 +38,14 @@ func Generate(s *scanner.Scanner, format Format, output string) (string, error) 
 	return content, nil
 }
 
+// WithBOM 在内容前加 UTF-8 BOM（EF BB BF），返回可直接写入的字节切片。
+// 供写文件与 Web 导出复用，确保 Windows 记事本能正确识别 UTF-8 中文。
+func WithBOM(content string) []byte {
+	return append([]byte{0xEF, 0xBB, 0xBF}, content...)
+}
+
 func writeFileWithBOM(path, content string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	if _, err := f.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
-		return err
-	}
-	_, err = f.WriteString(content)
-	return err
+	return os.WriteFile(path, WithBOM(content), 0o644)
 }
 
 func genText(s *scanner.Scanner) string {
