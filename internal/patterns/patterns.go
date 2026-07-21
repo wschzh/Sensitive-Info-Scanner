@@ -21,6 +21,7 @@ type Pattern struct {
 	Description string
 	Examples    []string
 	Hints       []string // 可选预过滤关键词；命中任意 hint 才运行正则，空则始终运行
+	MinDigits   int      // 可选数字候选过滤；全文数字数不足时跳过该规则
 	CrossLine   bool     // 是否需要跨行匹配（如私钥 -----BEGIN...END-----）
 	re          *regexp.Regexp
 	lowerHints  []string
@@ -70,6 +71,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `(?i)\b[1-9]\d{5}(?:19|20)\d{2}(?:0[1-9]|1[0-2])(?:0[1-9]|[12]\d|3[01])\d{3}[\dXx]\b`,
 		Description: "中国身份证号码",
 		Examples:    []string{"身份证号：11010519900307234X", "440308199001011234"},
+		MinDigits:   17,
 	},
 	{
 		Name:        "银行卡号",
@@ -77,6 +79,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `\b(?:4[0-9]{12}(?:[0-9]{3})?|5[1-5][0-9]{14}|3[47][0-9]{13}|3[0-9]{13}|6(?:011|5[0-9]{2})[0-9]{12})\b`,
 		Description: "主流银行卡号",
 		Examples:    []string{"4111111111111111"},
+		MinDigits:   13,
 	},
 	{
 		Name:        "密码",
@@ -102,6 +105,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `\b1[3-9]\d{9}\b`,
 		Description: "中国大陆手机号码",
 		Examples:    []string{"13812345678", "手机号：15987654321"},
+		MinDigits:   11,
 	},
 	{
 		Name:        "邮箱地址",
@@ -117,6 +121,7 @@ var all = compileAll([]Pattern{
 		Pattern:     `\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\b`,
 		Description: "IPv4地址（日志/代码中多为误报，已降为低级）",
 		Examples:    []string{"192.168.1.1"},
+		MinDigits:   4,
 	},
 
 	// ---------------- Low 低级 ----------------

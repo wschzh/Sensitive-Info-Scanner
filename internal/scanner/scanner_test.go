@@ -311,6 +311,37 @@ func TestPatternHintsSkipIrrelevantRules(t *testing.T) {
 	}
 }
 
+func TestNumericCandidateFilterDoesNotSkipMatches(t *testing.T) {
+	s := New(Config{})
+	content := strings.Join([]string{
+		"phone: 13812345678",
+		"id: 11010519900307234X",
+		"card: 4111111111111111",
+		"ip: 192.168.1.1",
+	}, "\n")
+	results := s.matchContent("numbers.txt", content)
+	seen := map[string]bool{}
+	for _, r := range results {
+		seen[r.PatternName] = true
+	}
+	for _, want := range []string{"手机号码", "身份证号", "银行卡号", "IP地址"} {
+		if !seen[want] {
+			t.Fatalf("数字候选过滤后未命中 %s", want)
+		}
+	}
+}
+
+func TestNumericCandidateFilterSkipsImpossibleText(t *testing.T) {
+	s := New(Config{})
+	results := s.matchContent("words.txt", strings.Repeat("plain words without numeric candidates\n", 20))
+	for _, r := range results {
+		switch r.PatternName {
+		case "手机号码", "身份证号", "银行卡号", "IP地址":
+			t.Fatalf("无足够数字文本不应命中数字规则，却命中 %s", r.PatternName)
+		}
+	}
+}
+
 // Stop 后 ScanDirectory 必须返回（不阻塞/不泄漏）。
 func TestStopReturns(t *testing.T) {
 	dir := t.TempDir()

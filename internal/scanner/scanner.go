@@ -593,10 +593,11 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 	now := time.Now()
 	lineStarts := computeLineStarts(content)
 	lowerContent := ""
+	digitCount := -1
 
 	// 单行模式：全文一次性匹配，用二分把匹配偏移换算成行号
 	for _, p := range s.single {
-		if !patternHintsMatch(content, &lowerContent, p.Hints, p.LowerHints()) {
+		if !patternCandidateMatch(content, &lowerContent, &digitCount, p) {
 			continue
 		}
 		for _, loc := range p.RE().FindAllStringIndex(content, maxMatchesPerLine) {
@@ -624,7 +625,7 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 
 	// 跨行模式：整段匹配，行号用匹配起点前的 \n 数计算，LineContent 截断
 	for _, p := range s.cross {
-		if !patternHintsMatch(content, &lowerContent, p.Hints, p.LowerHints()) {
+		if !patternCandidateMatch(content, &lowerContent, &digitCount, p) {
 			continue
 		}
 		for _, loc := range p.RE().FindAllStringIndex(content, -1) {
@@ -641,6 +642,18 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 		}
 	}
 	return results
+}
+
+func patternCandidateMatch(content string, lowerContent *string, digitCount *int, p patterns.Pattern) bool {
+	if p.MinDigits > 0 {
+		if digitCount != nil && *digitCount < 0 {
+			*digitCount = countDigits(content)
+		}
+		if digitCount != nil && *digitCount < p.MinDigits {
+			return false
+		}
+	}
+	return patternHintsMatch(content, lowerContent, p.Hints, p.LowerHints())
 }
 
 func patternHintsMatch(content string, lowerContent *string, hints, lowerHints []string) bool {
@@ -666,6 +679,16 @@ func patternHintsMatch(content string, lowerContent *string, hints, lowerHints [
 		}
 	}
 	return false
+}
+
+func countDigits(s string) int {
+	count := 0
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			count++
+		}
+	}
+	return count
 }
 
 // computeLineStarts 返回每行起始字节偏移（第 1 行恒为 0），供 matchContent 二分算行号。
