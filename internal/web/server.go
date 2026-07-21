@@ -111,12 +111,13 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "请求解析失败: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	if req.Path == "" {
-		http.Error(w, "path 不能为空", http.StatusBadRequest)
+	paths, err := scanTargets(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := os.Stat(req.Path); err != nil {
-		http.Error(w, "路径不存在: "+req.Path, http.StatusBadRequest)
+	if len(paths) == 0 {
+		http.Error(w, "path 不能为空", http.StatusBadRequest)
 		return
 	}
 
@@ -139,10 +140,12 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	s.mu.Unlock()
 
 	go func() {
-		if fi, _ := os.Stat(req.Path); fi.IsDir() {
-			sc.ScanDirectory(req.Path, req.Recursive)
+		if len(paths) > 1 {
+			sc.ScanPaths(paths, true)
+		} else if fi, _ := os.Stat(paths[0]); fi.IsDir() {
+			sc.ScanDirectory(paths[0], req.Recursive)
 		} else {
-			sc.ScanSingle(req.Path)
+			sc.ScanSingle(paths[0])
 		}
 		s.mu.Lock()
 		s.scanning = false
@@ -150,6 +153,33 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	w.WriteHeader(http.StatusAccepted)
+}
+
+func scanTargets(req scanRequest) ([]string, error) {
+	if req.Profile == scanner.ProfileFullDiskFast && req.Path == "" {
+		return defaultScanRoots(), nil
+	}
+	if req.Path == "" {
+		return nil, fmt.Errorf("path 不能为空")
+	}
+	if _, err := os.Stat(req.Path); err != nil {
+		return nil, fmt.Errorf("路径不存在: %s", req.Path)
+	}
+	return []string{req.Path}, nil
+}
+
+func defaultScanRoots() []string {
+	if runtime.GOOS == "windows" {
+		var roots []string
+		for c := 'C'; c <= 'Z'; c++ {
+			drive := string(c) + `:\`
+			if fi, err := os.Stat(drive); err == nil && fi.IsDir() {
+				roots = append(roots, drive)
+			}
+		}
+		return roots
+	}
+	return []string{"/"}
 }
 
 func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {

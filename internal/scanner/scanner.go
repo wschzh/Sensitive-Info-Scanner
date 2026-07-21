@@ -50,6 +50,7 @@ const (
 	skipTooLarge        = "too_large"
 	skipNonRegular      = "non_regular"
 	skipProfileDisabled = "profile_disabled"
+	skipInaccessible    = "inaccessible"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -331,6 +332,11 @@ func (s *Scanner) ScanSingle(path string) {
 // ScanDirectory 流式遍历 + worker pool 并发扫描。
 // producer(walkDir) → fileCh → N worker → resultCh → 单写者 aggregator(本 goroutine)。
 func (s *Scanner) ScanDirectory(root string, recursive bool) {
+	s.ScanPaths([]string{root}, recursive)
+}
+
+// ScanPaths 同步扫描多个文件/目录入口，共用同一轮结果与统计。
+func (s *Scanner) ScanPaths(paths []string, recursive bool) {
 	s.reset()
 	ctx, cancel := context.WithCancel(context.Background())
 	s.mu.Lock()
@@ -347,11 +353,40 @@ func (s *Scanner) ScanDirectory(root string, recursive bool) {
 
 	fileCh := make(chan string, walkBuffer)
 	resultCh := make(chan []types.ScanResult, s.cfg.Workers)
+	send := func(path string) bool {
+		s.discovered.Add(1)
+		select {
+		case fileCh <- path:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
 
 	// producer：流式遍历，路径不再入驻留切片
 	go func() {
 		defer close(fileCh)
-		s.walkDir(ctx, root, recursive, fileCh)
+		for _, root := range paths {
+			if ctx.Err() != nil {
+				return
+			}
+			fi, err := os.Stat(root)
+			if err != nil {
+				s.addSkipped(false, skipInaccessible)
+				continue
+			}
+			if fi.IsDir() {
+				s.walkDir(ctx, root, recursive, fileCh)
+				continue
+			}
+			if ok, reason := s.shouldScan(root); ok {
+				if !send(root) {
+					return
+				}
+			} else {
+				s.addSkipped(false, reason)
+			}
+		}
 	}()
 
 	// worker pool

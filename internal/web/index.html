@@ -56,17 +56,18 @@
 <!-- ===== 扫描页 ===== -->
 <div id="tab-scan" class="tab-panel">
 <div class="card">
-  <div><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
-    <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
-  </div>
-  <div style="margin-top:8px">
-    <label>扫描模式:
+  <div>
+    <label>扫描方式:
       <select id="profile" onchange="applyProfilePreset()">
-        <option value="normal">普通</option>
         <option value="full_disk_fast">全盘快速</option>
-        <option value="deep">深度</option>
+        <option value="normal">自定义扫描</option>
       </select>
     </label>
+  </div>
+  <div id="pathRow" style="margin-top:8px"><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
+    <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
+  </div>
+  <div id="customOptions" style="margin-top:8px">
     <label>扫描速度:
       <select id="walkEngine">
         <option value="std">标准</option>
@@ -81,7 +82,7 @@
     <label><input type="checkbox" class="lvl" value="medium">中级</label>
     <label><input type="checkbox" class="lvl" value="low">低级</label>
   </div>
-  <div class="muted" style="margin-top:6px">💡 扫描大批量文件（尤其是日志或软件安装目录）时，建议选择「全盘快速」或「快速」，并只勾「严重」「高级」；「标准」兼容性更稳，「快速」更适合全盘和大目录。</div>
+  <div id="scanHint" class="muted" style="margin-top:6px"></div>
   <div style="margin-top:10px">
     <button id="btnScan" onclick="startScan()">开始扫描</button>
     <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
@@ -166,6 +167,7 @@ let filterType = 'all';
 let filterKeyword = '';
 let rulesLoaded = false;
 let lastResultRefresh = 0;
+applyProfilePreset();
 
 // ===== Tab 切换 =====
 function switchTab(name) {
@@ -224,15 +226,18 @@ document.getElementById('fsearch').addEventListener('input', e => {
 });
 
 async function startScan() {
+  const profile = document.getElementById('profile').value;
   const path = document.getElementById('path').value.trim();
-  if (!path) { alert('请输入扫描路径'); return; }
-  const levels = [...document.querySelectorAll('.lvl:checked')].map(e => e.value);
+  if (profile !== 'full_disk_fast' && !path) { alert('请输入扫描路径'); return; }
+  const levels = profile === 'full_disk_fast'
+    ? ['critical', 'high']
+    : [...document.querySelectorAll('.lvl:checked')].map(e => e.value);
   const body = {
-    path,
-    recursive: document.getElementById('recursive').checked,
+    path: profile === 'full_disk_fast' ? '' : path,
+    recursive: profile === 'full_disk_fast' ? true : document.getElementById('recursive').checked,
     max_size: parseInt(document.getElementById('maxsize').value) * 1024 * 1024,
-    profile: document.getElementById('profile').value,
-    walk_engine: document.getElementById('walkEngine').value,
+    profile,
+    walk_engine: profile === 'full_disk_fast' ? 'fastwalk' : document.getElementById('walkEngine').value,
     levels
   };
   document.getElementById('btnScan').disabled = true;
@@ -286,12 +291,16 @@ async function poll() {
 function applyProfilePreset() {
   const profile = document.getElementById('profile').value;
   const levels = [...document.querySelectorAll('.lvl')];
+  const fullDisk = profile === 'full_disk_fast';
+  document.getElementById('pathRow').style.display = fullDisk ? 'none' : '';
+  document.getElementById('customOptions').style.display = fullDisk ? 'none' : '';
   if (profile === 'full_disk_fast') {
     levels.forEach(e => e.checked = e.value === 'critical' || e.value === 'high');
     document.getElementById('walkEngine').value = 'fastwalk';
     document.getElementById('maxsize').value = 10;
-  } else if (profile === 'deep') {
-    levels.forEach(e => e.checked = true);
+    document.getElementById('scanHint').textContent = '全盘快速会自动扫描所有可访问盘符，只检查严重/高级问题，并使用快速遍历。';
+  } else {
+    document.getElementById('scanHint').textContent = '自定义扫描需要选择路径，可调整扫描速度和级别；默认只检查严重/高级问题。';
   }
 }
 

@@ -242,6 +242,27 @@ func TestWalkEnginesProduceSameStats(t *testing.T) {
 	}
 }
 
+func TestScanPathsKeepsResultsAcrossRoots(t *testing.T) {
+	rootA := t.TempDir()
+	rootB := t.TempDir()
+	if err := os.WriteFile(filepath.Join(rootA, "a.txt"), []byte("api_key: root_a_1234567890\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(rootB, "b.txt"), []byte("api_key: root_b_1234567890\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{})
+	s.ScanPaths([]string{rootA, rootB}, true)
+	stats := s.Stats()
+	if stats.ScannedFiles != 2 {
+		t.Fatalf("ScannedFiles=%d want 2", stats.ScannedFiles)
+	}
+	if stats.TotalIssues != 2 {
+		t.Fatalf("TotalIssues=%d want 2", stats.TotalIssues)
+	}
+}
+
 func TestShouldScanCompoundLogAndKeywordBoundary(t *testing.T) {
 	s := New(Config{})
 	if ok, reason := s.shouldScan(filepath.Join("C:", "work", "app.log.1")); ok || reason != skipExcludedExt {
