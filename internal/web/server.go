@@ -52,6 +52,12 @@ func (s *Server) Shutdown() {
 	}
 }
 
+func (s *Server) currentScanner() *scanner.Scanner {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.scanner
+}
+
 // Start 在 127.0.0.1 随机端口启动 HTTP 服务，返回监听地址。
 func (s *Server) Start() (string, error) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -118,20 +124,21 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "已有扫描在进行", http.StatusConflict)
 		return
 	}
-	s.scanner = scanner.New(scanner.Config{
+	sc := scanner.New(scanner.Config{
 		MaxFileSize: req.MaxSize,
 		ScanLevels:  req.Levels,
 		Workers:     req.Workers,
 		MaxResults:  req.MaxResults,
 	})
+	s.scanner = sc
 	s.scanning = true
 	s.mu.Unlock()
 
 	go func() {
 		if fi, _ := os.Stat(req.Path); fi.IsDir() {
-			s.scanner.ScanDirectory(req.Path, req.Recursive)
+			sc.ScanDirectory(req.Path, req.Recursive)
 		} else {
-			s.scanner.ScanSingle(req.Path)
+			sc.ScanSingle(req.Path)
 		}
 		s.mu.Lock()
 		s.scanning = false
@@ -144,9 +151,10 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	s.mu.Lock()
 	scanning := s.scanning
+	sc := s.scanner
 	s.mu.Unlock()
-	scanned, total, current := s.scanner.Progress()
-	stats := s.scanner.Stats()
+	scanned, total, current := sc.Progress()
+	stats := sc.Stats()
 	pct := 0
 	if total > 0 {
 		pct = scanned * 100 / total
@@ -170,18 +178,19 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		Type:    q.Get("type"),
 		Keyword: q.Get("kw"),
 	}
-	items, total := s.scanner.ResultsPage(offset, limit, f)
+	sc := s.currentScanner()
+	items, total := sc.ResultsPage(offset, limit, f)
 	writeJSON(w, map[string]any{
 		"results": items,
 		"total":   total,
-		"stats":   s.scanner.Stats(),
+		"stats":   sc.Stats(),
 	})
 }
 
 // handleResultsSince 增量返回序号 seq 之后的新结果（扫描中轮询用，避免拉全量）。
 func (s *Server) handleResultsSince(w http.ResponseWriter, r *http.Request) {
 	seq, _ := strconv.Atoi(r.URL.Query().Get("seq"))
-	items, nextSeq := s.scanner.ResultsSince(seq)
+	items, nextSeq := s.currentScanner().ResultsSince(seq)
 	writeJSON(w, map[string]any{
 		"results":  items,
 		"next_seq": nextSeq,
@@ -189,7 +198,7 @@ func (s *Server) handleResultsSince(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	s.scanner.Stop()
+	s.currentScanner().Stop()
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -249,7 +258,8 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 	// 白名单：只允许删出现在当前结果集中的路径
 	allowed := make(map[string]bool)
-	for _, res := range s.scanner.Results() {
+	sc := s.currentScanner()
+	for _, res := range sc.Results() {
 		allowed[res.FilePath] = true
 	}
 
@@ -260,6 +270,7 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]delResult, 0, len(req.Paths))
 	deleted := 0
+	deletedPaths := make(map[string]bool)
 	for _, p := range req.Paths {
 		if p == "" {
 			continue
@@ -283,11 +294,16 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 		}
 		out = append(out, delResult{Path: p, OK: true})
 		deleted++
+		deletedPaths[p] = true
+	}
+	if deleted > 0 {
+		sc.RemoveResultsForPaths(deletedPaths)
 	}
 	writeJSON(w, map[string]any{"results": out, "deleted": deleted, "total": len(out)})
 }
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
+	sc := s.currentScanner()
 	format := report.Text
 	if r.URL.Query().Get("format") == "json" {
 		format = report.JSON
@@ -305,7 +321,7 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	if format == report.Text {
 		_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM（text 格式，避免中文乱码）
 	}
-	_ = report.GenerateTo(s.scanner, format, w) // 流式写 HTTP 响应，不累积全量字符串
+	_ = report.GenerateTo(sc, format, w) // 流式写 HTTP 响应，不累积全量字符串
 }
 
 // handleBrowse 目录浏览：供前端目录选择器懒加载子目录。

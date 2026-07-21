@@ -139,6 +139,41 @@ func TestResultsPageAndSince(t *testing.T) {
 	}
 }
 
+func TestRemoveResultsForPaths(t *testing.T) {
+	dir := t.TempDir()
+	keep := filepath.Join(dir, "keep.txt")
+	del := filepath.Join(dir, "delete.txt")
+	if err := os.WriteFile(keep, []byte("tel: 13900000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(del, []byte("tel: 13900000002\nmail: user@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{})
+	s.ScanDirectory(dir, false)
+	if got := s.Stats().TotalIssues; got != 3 {
+		t.Fatalf("TotalIssues=%d want 3", got)
+	}
+
+	removed := s.RemoveResultsForPaths(map[string]bool{del: true})
+	if removed != 2 {
+		t.Fatalf("removed=%d want 2", removed)
+	}
+	stats := s.Stats()
+	if stats.TotalIssues != 1 {
+		t.Errorf("TotalIssues=%d want 1", stats.TotalIssues)
+	}
+	if stats.FilesWithIssues != 1 {
+		t.Errorf("FilesWithIssues=%d want 1", stats.FilesWithIssues)
+	}
+	for _, r := range s.Results() {
+		if r.FilePath == del {
+			t.Fatalf("已删除路径 %s 不应继续出现在结果集中", del)
+		}
+	}
+}
+
 // Stop 后 ScanDirectory 必须返回（不阻塞/不泄漏）。
 func TestStopReturns(t *testing.T) {
 	dir := t.TempDir()

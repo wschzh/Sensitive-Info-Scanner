@@ -10,6 +10,7 @@ package patterns
 import (
 	"regexp"
 	"sensitivescanner/internal/types"
+	"strings"
 )
 
 // Pattern 单条敏感信息模式。
@@ -208,6 +209,7 @@ func IsScannableExt(ext string) bool { return scannableExt[ext] }
 var ExcludeDirs = []string{
 	".git", ".svn", ".hg", "node_modules", "__pycache__",
 	".vscode", ".idea", "bin", "obj", "dist", "build", "temp", "tmp",
+	"log", "logs",
 	"System Volume Information", "$Recycle.Bin",
 }
 
@@ -215,16 +217,16 @@ var ExcludeDirs = []string{
 var excludeDirSet = func() map[string]bool {
 	m := map[string]bool{}
 	for _, d := range ExcludeDirs {
-		m[d] = true
+		m[strings.ToLower(d)] = true
 	}
 	return m
 }()
 
 // IsExcludedDir 目录名是否在排除集合。
-func IsExcludedDir(name string) bool { return excludeDirSet[name] }
+func IsExcludedDir(name string) bool { return excludeDirSet[strings.ToLower(name)] }
 
 // ExcludeExtensions 需排除的扩展名（原 .log$/.tmp$）。
-var ExcludeExtensions = []string{".log", ".tmp"}
+var ExcludeExtensions = []string{".log", ".tmp", ".out", ".err", ".pid", ".dat"}
 
 // IsExcludedExt 扩展名是否在排除集合。
 func IsExcludedExt(ext string) bool {

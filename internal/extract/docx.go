@@ -8,6 +8,9 @@ import (
 	"strings"
 )
 
+// maxDOCXUncompressed docx 解压后大小上限（字节），防止 zip 炸弹或超大文档拖垮进程。
+const maxDOCXUncompressed = 200 * 1024 * 1024 // 200MB
+
 // DOCX 从 docx 提取正文文本：解压 word/document.xml，收集 <w:t> 文本，
 // <w:tab> 转 \t，<w:br>/<w:cr> 与段落结束 <w:p> 转 \n。
 func DOCX(path string) (string, error) {
@@ -16,6 +19,15 @@ func DOCX(path string) (string, error) {
 		return "", err
 	}
 	defer zr.Close()
+
+	var total uint64
+	for _, f := range zr.File {
+		total += f.UncompressedSize64
+		if total > maxDOCXUncompressed {
+			return "", fmt.Errorf("docx 解压后约 %dMB 超过 %dMB 上限，跳过以防 OOM",
+				total/1024/1024, maxDOCXUncompressed/1024/1024)
+		}
+	}
 
 	var docFile *zip.File
 	for _, f := range zr.File {

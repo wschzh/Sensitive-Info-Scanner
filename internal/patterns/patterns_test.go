@@ -82,3 +82,19 @@ func TestByLevel(t *testing.T) {
 		t.Errorf("Critical 期望 3 条，实际 %d", got)
 	}
 }
+
+func TestExcludedDirCaseInsensitive(t *testing.T) {
+	for _, name := range []string{"LOGS", "Temp", "NODE_MODULES", "Dist"} {
+		if !IsExcludedDir(name) {
+			t.Errorf("目录 %q 应大小写不敏感地被排除", name)
+		}
+	}
+}
+
+func TestExcludedNoiseExtensions(t *testing.T) {
+	for _, ext := range []string{".out", ".err", ".pid", ".dat"} {
+		if !IsExcludedExt(ext) {
+			t.Errorf("扩展名 %q 应被排除", ext)
+		}
+	}
+}

@@ -19,14 +19,14 @@ import (
 )
 
 const (
-	defaultMaxFileSize int64 = 10 * 1024 * 1024
-	defaultMaxResults        = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
-	maxWorkers               = 64
-	walkBuffer               = 1024
-	perFileTimeout           = 120 * time.Second // 单文件扫描超时：防个别卡死文件拖垮 worker
-	maxMatchesPerLine        = 5000              // 每行每 pattern 最多记录匹配数（防 minified 巨行拖慢）
-	lineContextPad           = 80                // LineContent 在匹配位置左右各取的字节数
-	minifiedLineThreshold    = 4096              // 单行超过此字节数视为压缩/编译产物，跳过（噪音）
+	defaultMaxFileSize    int64 = 10 * 1024 * 1024
+	defaultMaxResults           = 100000 // 内存保留结果上限（约 50-100MB），超出按优先级丢弃低级别
+	maxWorkers                  = 64
+	walkBuffer                  = 1024
+	perFileTimeout              = 120 * time.Second // 单文件扫描超时：防个别卡死文件拖垮 worker
+	maxMatchesPerLine           = 5000              // 每行每 pattern 最多记录匹配数（防 minified 巨行拖慢）
+	lineContextPad              = 80                // LineContent 在匹配位置左右各取的字节数
+	minifiedLineThreshold       = 4096              // 单行超过此字节数视为压缩/编译产物，跳过（噪音）
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -144,6 +144,40 @@ func (s *Scanner) ResultsSince(fromSeq int) ([]types.ScanResult, int) {
 	out := make([]types.ScanResult, len(s.results)-fromSeq)
 	copy(out, s.results[fromSeq:])
 	return out, len(s.results)
+}
+
+// RemoveResultsForPaths 从内存结果集中移除指定文件路径对应的命中，并同步修正展示统计。
+// 删除文件后调用，避免后端保留旧扫描快照导致刷新页面时已删除文件重新出现。
+func (s *Scanner) RemoveResultsForPaths(paths map[string]bool) int {
+	if len(paths) == 0 {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	kept := s.results[:0]
+	removed := 0
+	for _, r := range s.results {
+		if paths[r.FilePath] {
+			removed++
+			if s.stats.TotalIssues > 0 {
+				s.stats.TotalIssues--
+			}
+			if s.stats.IssuesByLevel[r.Level] > 0 {
+				s.stats.IssuesByLevel[r.Level]--
+			}
+			continue
+		}
+		kept = append(kept, r)
+	}
+	s.results = kept
+
+	files := make(map[string]bool)
+	for _, r := range s.results {
+		files[r.FilePath] = true
+	}
+	s.stats.FilesWithIssues = len(files)
+	return removed
 }
 
 // filterLocked 调用方须持 s.mu。无筛选条件时直接返回 results 引用（caller 再按页拷贝）。

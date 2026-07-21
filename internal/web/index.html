@@ -152,6 +152,7 @@ let filterLevel = 'all';
 let filterType = 'all';
 let filterKeyword = '';
 let rulesLoaded = false;
+let lastResultRefresh = 0;
 
 // ===== Tab 切换 =====
 function switchTab(name) {
@@ -224,6 +225,7 @@ async function startScan() {
   if (!res.ok) { document.getElementById('btnScan').disabled = false; alert(await res.text()); return; }
   scanning = true;
   pageResults = []; total = 0; curPage = 1;
+  lastResultRefresh = 0;
   renderResults();
   document.getElementById('btnStop').disabled = false;
   poll();
@@ -248,6 +250,11 @@ async function poll() {
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span><span>问题: ${r.stats.total_issues}</span>${trunc}`;
+    const now = Date.now();
+    if (now - lastResultRefresh > 1000) {
+      lastResultRefresh = now;
+      await loadPage(curPage);
+    }
     if (!r.scanning) {
       scanning = false;
       document.getElementById('btnScan').disabled = false;
@@ -343,13 +350,9 @@ async function deleteSelected() {
     const data = await res.json();
     const okCount = data.deleted || 0;
     const failCount = (data.total || 0) - okCount;
-    // 本地即时移除已删除的行（后端结果集是扫描快照，不会因文件删除而自动更新）
+    // 后端已同步移除删除结果，刷新当前页以保持分页和统计一致。
     const done = new Set((data.results || []).filter(r => r.ok).map(r => r.path));
-    if (done.size > 0) {
-      pageResults = pageResults.filter(it => !done.has(it.file_path));
-      total -= done.size;
-      renderResults();
-    }
+    if (done.size > 0) await loadPage(curPage);
     if (failCount > 0) {
       const failed = (data.results || []).filter(r => !r.ok)
         .map(r => `${shortPath(r.path)}: ${r.err}`).join('\n');
