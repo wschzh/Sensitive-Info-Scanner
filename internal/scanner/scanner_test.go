@@ -279,6 +279,31 @@ func TestShouldScanCompoundLogAndKeywordBoundary(t *testing.T) {
 	}
 }
 
+func TestFullDiskFastSkipsPythonRuntimeNoise(t *testing.T) {
+	fast := New(Config{ScanProfile: ProfileFullDiskFast})
+	for _, path := range []string{
+		`C:\Python27\Tools\demo.py`,
+		`C:\Python27\Lib\urllib.py`,
+		`D:\Python311\Lib\site.py`,
+		`D:\Python3.12\Tools\script.py`,
+	} {
+		if ok, reason := fast.shouldScan(path); ok || reason != skipExcludedPath {
+			t.Fatalf("Python runtime path should be excluded: %s ok=%v reason=%q", path, ok, reason)
+		}
+	}
+
+	custom := New(Config{})
+	if ok, reason := custom.shouldScan(`C:\Python27\Lib\urllib.py`); !ok || reason != "" {
+		t.Fatalf("custom scan should allow explicit Python runtime path, ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := fast.shouldScan(`C:\work\myproject\tools\script.py`); !ok || reason != "" {
+		t.Fatalf("project tools directory should not be excluded, ok=%v reason=%q", ok, reason)
+	}
+	if ok, reason := fast.shouldScan(`C:\work\myproject\lib\module.py`); !ok || reason != "" {
+		t.Fatalf("project lib directory should not be excluded, ok=%v reason=%q", ok, reason)
+	}
+}
+
 func TestFullDiskFastProfileDefaults(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "secrets.txt"),

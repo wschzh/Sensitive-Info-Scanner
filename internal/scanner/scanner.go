@@ -865,6 +865,9 @@ func (s *Scanner) shouldScan(path string) (bool, string) {
 	if s.pathHasExcludedKeyword(path) {
 		return false, skipExcludedPath
 	}
+	if s.cfg.ScanProfile == ProfileFullDiskFast && isPythonRuntimeNoisePath(path) {
+		return false, skipExcludedPath
+	}
 	ext := strings.ToLower(filepath.Ext(path))
 	if patterns.IsExcludedFileName(filepath.Base(path)) {
 		return false, skipExcludedExt
@@ -875,14 +878,52 @@ func (s *Scanner) shouldScan(path string) (bool, string) {
 	return true, ""
 }
 
+func isPythonRuntimeNoisePath(path string) bool {
+	parts := pathPartsLower(path)
+	for i := 0; i+1 < len(parts); i++ {
+		if isPythonInstallDir(parts[i]) && (parts[i+1] == "lib" || parts[i+1] == "tools") {
+			return true
+		}
+	}
+	return false
+}
+
+func isPythonInstallDir(part string) bool {
+	if part == "python" {
+		return true
+	}
+	if !strings.HasPrefix(part, "python") {
+		return false
+	}
+	suffix := strings.TrimPrefix(part, "python")
+	if suffix == "" {
+		return true
+	}
+	for _, r := range suffix {
+		if (r < '0' || r > '9') && r != '.' {
+			return false
+		}
+	}
+	return true
+}
+
+func pathPartsLower(path string) []string {
+	var out []string
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
+		if part != "" {
+			out = append(out, strings.ToLower(part))
+		}
+	}
+	return out
+}
+
 func (s *Scanner) pathHasExcludedKeyword(path string) bool {
 	if len(s.cfg.ExcludePathKeywords) == 0 {
 		return false
 	}
-	for _, part := range strings.FieldsFunc(path, func(r rune) bool {
-		return r == '/' || r == '\\'
-	}) {
-		lower := strings.ToLower(part)
+	for _, lower := range pathPartsLower(path) {
 		for _, kw := range s.cfg.ExcludePathKeywords {
 			if kw != "" && lower == kw {
 				return true
