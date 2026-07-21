@@ -793,9 +793,6 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 		for _, loc := range p.RE().FindAllStringIndex(content, maxMatchesPerLine) {
 			start, end := loc[0], loc[1]
 			matched := content[start:end]
-			if !validPatternMatch(p.Name, matched) {
-				continue
-			}
 			lineNum := sort.Search(len(lineStarts), func(i int) bool { return lineStarts[i] > start })
 			if lineNum == 0 {
 				lineNum = 1
@@ -805,12 +802,16 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 			for le < len(content) && content[le] != '\n' {
 				le++
 			}
+			line := content[ls:le]
+			if !validPatternMatch(p.Name, matched, line) {
+				continue
+			}
 			results = append(results, types.ScanResult{
 				FilePath:    path,
 				PatternName: p.Name,
 				Level:       p.Level,
 				LineNumber:  lineNum,
-				LineContent: contextAround(content[ls:le], start-ls, end-ls, lineContextPad),
+				LineContent: contextAround(line, start-ls, end-ls, lineContextPad),
 				MatchedText: matched,
 				Timestamp:   now,
 			})
@@ -838,11 +839,36 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 	return results
 }
 
-func validPatternMatch(patternName, matched string) bool {
+func validPatternMatch(patternName, matched, line string) bool {
 	if patternName == "银行卡号" {
-		return validLuhn(matched)
+		return validBankCardMatch(matched, line)
 	}
 	return true
+}
+
+func validBankCardMatch(card, line string) bool {
+	if !validLuhn(card) {
+		return false
+	}
+	if strings.HasPrefix(card, "62") {
+		return true
+	}
+	return hasBankCardContext(line)
+}
+
+func hasBankCardContext(line string) bool {
+	lower := strings.ToLower(line)
+	for _, kw := range []string{
+		"银行卡", "银行卡号", "卡号", "银行账号", "银行账户", "账号", "账户",
+		"储蓄卡", "借记卡", "信用卡", "开户行",
+		"bankcard", "bank card", "card no", "card number", "credit card", "debit card",
+		"card:", "card=", "visa", "mastercard", "master card", "amex", "discover",
+	} {
+		if strings.Contains(lower, kw) {
+			return true
+		}
+	}
+	return false
 }
 
 func validLuhn(s string) bool {

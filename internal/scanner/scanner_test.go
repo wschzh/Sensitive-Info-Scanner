@@ -425,6 +425,8 @@ func TestBankCardRequiresLuhnAndPrefersUnionPay(t *testing.T) {
 		"unionpay16: 6222020000000007",
 		"unionpay19: 6217000000000000004",
 		"visa: 4111111111111111",
+		"设备序列号: 4857544320476826",
+		"卡号: 4857544320476826",
 		"bad_check_digit: 6222020000000008",
 		"random_digits: 1234567890123456",
 	}, "\n")
@@ -436,7 +438,7 @@ func TestBankCardRequiresLuhnAndPrefersUnionPay(t *testing.T) {
 			got[r.MatchedText] = true
 		}
 	}
-	for _, want := range []string{"6222020000000007", "6217000000000000004", "4111111111111111"} {
+	for _, want := range []string{"6222020000000007", "6217000000000000004", "4111111111111111", "4857544320476826"} {
 		if !got[want] {
 			t.Fatalf("应命中通过 Luhn 的银行卡号 %s，实际=%v", want, got)
 		}
@@ -444,6 +446,16 @@ func TestBankCardRequiresLuhnAndPrefersUnionPay(t *testing.T) {
 	for _, bad := range []string{"6222020000000008", "1234567890123456"} {
 		if got[bad] {
 			t.Fatalf("不应命中未通过规则/Luhn 的银行卡号 %s", bad)
+		}
+	}
+}
+
+func TestBankCardSkipsNonUnionPayWithoutCardContext(t *testing.T) {
+	s := New(Config{})
+	results := s.matchContent("serial.txt", "设备序列号: 4857544320476826\n")
+	for _, r := range results {
+		if r.PatternName == "银行卡号" {
+			t.Fatalf("设备序列号不应命中银行卡号: %+v", r)
 		}
 	}
 }
