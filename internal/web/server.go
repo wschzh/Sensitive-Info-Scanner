@@ -200,6 +200,7 @@ func isBroadRootScan(paths []string) bool {
 func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
+	stoppedForMemory := false
 	for {
 		select {
 		case <-done:
@@ -213,6 +214,12 @@ func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
 			diag.Printf("watchdog scanned=%d total=%d current=%q active=%d heap_mb=%d sys_mb=%d goroutines=%d issues=%d skipped=%d",
 				scanned, total, current, len(active), mem.HeapAlloc/1024/1024, mem.Sys/1024/1024,
 				runtime.NumGoroutine(), stats.TotalIssues, stats.SkippedFiles+stats.SkippedDirs)
+			if !stoppedForMemory && (mem.HeapAlloc >= 4*1024*1024*1024 || mem.Sys >= 8*1024*1024*1024) {
+				stoppedForMemory = true
+				diag.Printf("watchdog memory_guard_stop heap_mb=%d sys_mb=%d scanned=%d total=%d",
+					mem.HeapAlloc/1024/1024, mem.Sys/1024/1024, scanned, total)
+				sc.Stop()
+			}
 			for i, f := range active {
 				if i >= 5 {
 					break

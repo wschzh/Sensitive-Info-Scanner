@@ -105,6 +105,7 @@ type Scanner struct {
 	scanned    atomic.Int64  // 已完成扫描的文件数
 	discovered atomic.Int64  // walker 已发现的文件数（扫描中实时增长）
 	scanSlots  chan struct{} // 限制超时后尚未退出的解析 goroutine，避免资源耗尽
+	backlogLog atomic.Int64
 }
 
 type activeFile struct {
@@ -532,7 +533,11 @@ func (s *Scanner) scanFileTimeout(ctx context.Context, worker int, path string) 
 	case s.scanSlots <- struct{}{}:
 	default:
 		s.addSkipped(false, skipTimeoutBacklog)
-		s.addEvent("timeout_backlog", worker, path, 0)
+		s.addBacklogEvent(worker, path)
+		select {
+		case <-time.After(200 * time.Millisecond):
+		case <-ctx.Done():
+		}
 		return nil
 	}
 	ch := make(chan result, 1)
@@ -610,6 +615,13 @@ func (s *Scanner) addEvent(event string, worker int, path string, seconds int) {
 	s.pmu.Unlock()
 	if event == "timeout" || event == "timeout_backlog" || event == "cancel" || (event == "done" && seconds >= 10) {
 		diag.Printf("scan event=%s worker=%d seconds=%d path=%q", event, worker, seconds, path)
+	}
+}
+
+func (s *Scanner) addBacklogEvent(worker int, path string) {
+	n := s.backlogLog.Add(1)
+	if n == 1 || n%100 == 0 {
+		s.addEvent("timeout_backlog", worker, path, 0)
 	}
 }
 
