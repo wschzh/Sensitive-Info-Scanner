@@ -97,13 +97,21 @@ func genTextTo(s *scanner.Scanner, w io.Writer) error {
 		fmt.Fprintf(w, "未发现敏感信息\n")
 		return nil
 	}
-	for _, r := range results {
-		content := cleanPrintable(r.LineContent)
-		if len([]rune(content)) > 100 {
-			content = string([]rune(content)[:100]) + "..."
+	for _, f := range s.ResultsByFile(scanner.ResultFilter{}) {
+		count := fmt.Sprintf("%d", f.IssueCount)
+		if f.IssueOverflow {
+			count += "+"
 		}
-		fmt.Fprintf(w, "[%s] %s:%d  类型:%s  匹配:%s  内容:%s\n",
-			types.LevelConfig[r.Level].Name, r.FilePath, r.LineNumber, r.PatternName, cleanPrintable(r.MatchedText), content)
+		fmt.Fprintf(w, "[%s] %s  问题:%s  类型:%s\n",
+			types.LevelConfig[f.HighestLevel].Name, f.FilePath, count, strings.Join(f.PatternNames, "、"))
+		for _, r := range f.Samples {
+			content := cleanPrintable(r.LineContent)
+			if len([]rune(content)) > 100 {
+				content = string([]rune(content)[:100]) + "..."
+			}
+			fmt.Fprintf(w, "  - 第%d行  %s  匹配:%s  内容:%s\n",
+				r.LineNumber, r.PatternName, cleanPrintable(r.MatchedText), content)
+		}
 	}
 	return nil
 }
@@ -124,6 +132,7 @@ func genJSONTo(s *scanner.Scanner, w io.Writer) error {
 			"issues_by_level":   stats.IssuesByLevel,
 			"truncated_count":   stats.TruncatedCount,
 		},
+		"files":   s.ResultsByFile(scanner.ResultFilter{}),
 		"results": s.Results(),
 	}
 	enc := json.NewEncoder(w)

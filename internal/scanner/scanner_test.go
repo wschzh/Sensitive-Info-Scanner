@@ -139,6 +139,56 @@ func TestResultsPageAndSince(t *testing.T) {
 	}
 }
 
+func TestResultsFilePageGroupsByFile(t *testing.T) {
+	dir := t.TempDir()
+	a := filepath.Join(dir, "a.txt")
+	b := filepath.Join(dir, "b.txt")
+	if err := os.WriteFile(a, []byte("mail: a@example.com\ntel: 13900000001\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(b, []byte("mail: b@example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	s := New(Config{})
+	s.ScanDirectory(dir, false)
+	files, total := s.ResultsFilePage(0, 10, ResultFilter{})
+	if total != 2 {
+		t.Fatalf("file total=%d want 2", total)
+	}
+	if len(files) != 2 {
+		t.Fatalf("files len=%d want 2", len(files))
+	}
+	for _, f := range files {
+		if f.FilePath == a && f.IssueCount != 2 {
+			t.Fatalf("a IssueCount=%d want 2", f.IssueCount)
+		}
+		if len(f.Samples) == 0 {
+			t.Fatalf("%s should include samples", f.FilePath)
+		}
+	}
+}
+
+func TestMatchContentCapsFindingsPerFile(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 12; i++ {
+		fmt.Fprintf(&b, "mail: user%02d@example.com\n", i)
+	}
+	s := New(Config{})
+	results := s.matchContent("many.txt", b.String())
+	if len(results) != maxFindingsPerFile {
+		t.Fatalf("results len=%d want %d", len(results), maxFindingsPerFile)
+	}
+	for _, r := range results {
+		if !r.FileIssueOverflow {
+			t.Fatalf("FileIssueOverflow=false, want true")
+		}
+		if r.FileIssueCount != maxFindingsPerFile {
+			t.Fatalf("FileIssueCount=%d want %d", r.FileIssueCount, maxFindingsPerFile)
+		}
+	}
+}
+
 func TestRemoveResultsForPaths(t *testing.T) {
 	dir := t.TempDir()
 	keep := filepath.Join(dir, "keep.txt")
@@ -556,10 +606,10 @@ func TestMatchCrossLinePrivateKey(t *testing.T) {
 	}
 }
 
-// 压测：海量命中（10万+）下 MaxResults 截断 + 统计准确 + 不 OOM。
+// 压测：海量命中（10万+ 候选）下按文件封顶，避免单文件刷屏和 OOM。
 func TestStressManyResults(t *testing.T) {
 	const files = 200
-	const urlsPerFile = 500 // 每文件 500 URL(low) + 1 api_key(critical) = 100200 命中
+	const urlsPerFile = 500 // 每文件 500 URL(low) + 1 api_key(critical)，最终每文件封顶 10 条
 	dir := t.TempDir()
 	writeFiles(t, dir, files, func(i int) string {
 		var b strings.Builder
@@ -569,11 +619,11 @@ func TestStressManyResults(t *testing.T) {
 		}
 		return b.String()
 	})
-	s := New(Config{Workers: 8, MaxResults: 10000}) // 小上限强制截断 low
+	s := New(Config{Workers: 8, MaxResults: 10000})
 	s.ScanDirectory(dir, false)
 
 	stats := s.Stats()
-	wantTotal := files * (urlsPerFile + 1) // 100200
+	wantTotal := files * maxFindingsPerFile
 	if stats.TotalIssues != wantTotal {
 		t.Errorf("TotalIssues=%d want %d", stats.TotalIssues, wantTotal)
 	}
@@ -586,8 +636,15 @@ func TestStressManyResults(t *testing.T) {
 	if criticalKept != files {
 		t.Errorf("critical retained=%d want %d（优先级保留应全留）", criticalKept, files)
 	}
-	if stats.TruncatedByLevel[types.Low] == 0 {
-		t.Errorf("期望 low 被大量截断，实际 TruncatedByLevel[low]=0")
+	filesByResult, total := s.ResultsFilePage(0, files, ResultFilter{})
+	if total != files {
+		t.Fatalf("file total=%d want %d", total, files)
+	}
+	for _, f := range filesByResult {
+		if f.IssueCount != maxFindingsPerFile || !f.IssueOverflow {
+			t.Fatalf("%s IssueCount=%d overflow=%v, want %d+",
+				f.FilePath, f.IssueCount, f.IssueOverflow, maxFindingsPerFile)
+		}
 	}
 }
 

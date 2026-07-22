@@ -33,13 +33,26 @@ var LevelConfig = map[Level]LevelInfo{
 
 // ScanResult 单条扫描结果。
 type ScanResult struct {
-	FilePath    string    `json:"file_path"`
-	PatternName string    `json:"pattern_name"`
-	Level       Level     `json:"level"`
-	LineNumber  int       `json:"line_number"`
-	LineContent string    `json:"line_content"`
-	MatchedText string    `json:"matched_text"`
-	Timestamp   time.Time `json:"timestamp"`
+	FilePath          string    `json:"file_path"`
+	PatternName       string    `json:"pattern_name"`
+	Level             Level     `json:"level"`
+	LineNumber        int       `json:"line_number"`
+	LineContent       string    `json:"line_content"`
+	MatchedText       string    `json:"matched_text"`
+	Timestamp         time.Time `json:"timestamp"`
+	FileIssueCount    int       `json:"file_issue_count,omitempty"`
+	FileIssueOverflow bool      `json:"file_issue_overflow,omitempty"`
+}
+
+// FileResultSummary 按文件聚合后的扫描结果，用于 Web/报告展示。
+type FileResultSummary struct {
+	FilePath      string       `json:"file_path"`
+	HighestLevel  Level        `json:"highest_level"`
+	IssueCount    int          `json:"issue_count"`
+	IssueOverflow bool         `json:"issue_overflow,omitempty"`
+	PatternNames  []string     `json:"pattern_names"`
+	Samples       []ScanResult `json:"samples,omitempty"`
+	LastSeen      time.Time    `json:"last_seen"`
 }
 
 // ScanStatistics 扫描统计。

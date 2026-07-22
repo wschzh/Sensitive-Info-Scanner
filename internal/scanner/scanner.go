@@ -31,6 +31,7 @@ const (
 	maxRecentEvents             = 80
 	walkBuffer                  = 1024
 	perFileTimeout              = 120 * time.Second // 单文件扫描超时：防个别卡死文件拖垮 worker
+	maxFindingsPerFile          = 10                // 单文件最多保留 10 条明细，超过后标记为 10+
 	maxMatchesPerLine           = 5000              // 每行每 pattern 最多记录匹配数（防 minified 巨行拖慢）
 	lineContextPad              = 80                // LineContent 在匹配位置左右各取的字节数
 	minifiedLineThreshold       = 4096              // 单行超过此字节数视为压缩/编译产物，跳过（噪音）
@@ -252,6 +253,42 @@ func (s *Scanner) ResultsPage(offset, limit int, f ResultFilter) ([]types.ScanRe
 	return out, total
 }
 
+// ResultsFilePage 按文件聚合后分页返回结果，total 为筛选后的文件数。
+func (s *Scanner) ResultsFilePage(offset, limit int, f ResultFilter) ([]types.FileResultSummary, int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := s.filterLocked(f)
+	grouped := groupResultsByFile(filtered)
+	total := len(grouped)
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > total {
+		offset = total
+	}
+	if limit <= 0 {
+		limit = 1000
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	out := make([]types.FileResultSummary, end-offset)
+	copy(out, grouped[offset:end])
+	return out, total
+}
+
+// ResultsByFile 返回全部按文件聚合后的结果。
+func (s *Scanner) ResultsByFile(f ResultFilter) []types.FileResultSummary {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	filtered := s.filterLocked(f)
+	grouped := groupResultsByFile(filtered)
+	out := make([]types.FileResultSummary, len(grouped))
+	copy(out, grouped)
+	return out
+}
+
 // ResultsSince 返回序号 fromSeq 之后新增的结果（扫描中增量拉取），nextSeq 为当前结果总数。
 func (s *Scanner) ResultsSince(fromSeq int) ([]types.ScanResult, int) {
 	s.mu.Lock()
@@ -322,6 +359,48 @@ func (s *Scanner) filterLocked(f ResultFilter) []types.ScanResult {
 			}
 		}
 		out = append(out, r)
+	}
+	return out
+}
+
+func groupResultsByFile(results []types.ScanResult) []types.FileResultSummary {
+	byPath := make(map[string]*types.FileResultSummary)
+	patternsByPath := make(map[string]map[string]bool)
+	order := make([]string, 0)
+	for _, r := range results {
+		g := byPath[r.FilePath]
+		if g == nil {
+			g = &types.FileResultSummary{
+				FilePath:     r.FilePath,
+				HighestLevel: r.Level,
+			}
+			byPath[r.FilePath] = g
+			patternsByPath[r.FilePath] = make(map[string]bool)
+			order = append(order, r.FilePath)
+		}
+		if levelPriority(r.Level) < levelPriority(g.HighestLevel) {
+			g.HighestLevel = r.Level
+		}
+		g.IssueCount++
+		if r.FileIssueOverflow {
+			g.IssueOverflow = true
+		}
+		if !patternsByPath[r.FilePath][r.PatternName] {
+			patternsByPath[r.FilePath][r.PatternName] = true
+			g.PatternNames = append(g.PatternNames, r.PatternName)
+		}
+		if len(g.Samples) < 3 {
+			g.Samples = append(g.Samples, r)
+		}
+		if r.Timestamp.After(g.LastSeen) {
+			g.LastSeen = r.Timestamp
+		}
+	}
+	out := make([]types.FileResultSummary, 0, len(order))
+	for _, path := range order {
+		g := byPath[path]
+		sort.Strings(g.PatternNames)
+		out = append(out, *g)
 	}
 	return out
 }
@@ -865,8 +944,18 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 	lineStarts := computeLineStarts(content)
 	lowerContent := ""
 	digitCount := -1
+	overflow := false
+	addResult := func(r types.ScanResult) bool {
+		if len(results) >= maxFindingsPerFile {
+			overflow = true
+			return false
+		}
+		results = append(results, r)
+		return true
+	}
 
 	// 单行模式：全文一次性匹配，用二分把匹配偏移换算成行号
+singleLoop:
 	for _, p := range s.single {
 		if !patternCandidateMatch(content, &lowerContent, &digitCount, p) {
 			continue
@@ -887,7 +976,7 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 			if !validPatternMatch(p.Name, matched, line) {
 				continue
 			}
-			results = append(results, types.ScanResult{
+			if !addResult(types.ScanResult{
 				FilePath:    path,
 				PatternName: p.Name,
 				Level:       p.Level,
@@ -895,26 +984,42 @@ func (s *Scanner) matchContent(path, content string) []types.ScanResult {
 				LineContent: contextAround(line, start-ls, end-ls, lineContextPad),
 				MatchedText: matched,
 				Timestamp:   now,
-			})
+			}) {
+				break singleLoop
+			}
 		}
 	}
 
-	// 跨行模式：整段匹配，行号用匹配起点前的 \n 数计算，LineContent 截断
-	for _, p := range s.cross {
-		if !patternCandidateMatch(content, &lowerContent, &digitCount, p) {
-			continue
+	if !overflow {
+		// 跨行模式：整段匹配，行号用匹配起点前的 \n 数计算，LineContent 截断
+	crossLoop:
+		for _, p := range s.cross {
+			if !patternCandidateMatch(content, &lowerContent, &digitCount, p) {
+				continue
+			}
+			for _, loc := range p.RE().FindAllStringIndex(content, -1) {
+				lineNum := 1 + strings.Count(content[:loc[0]], "\n")
+				if !addResult(types.ScanResult{
+					FilePath:    path,
+					PatternName: p.Name,
+					Level:       p.Level,
+					LineNumber:  lineNum,
+					LineContent: truncateRunes(strings.TrimSpace(content[loc[0]:loc[1]]), 200),
+					MatchedText: content[loc[0]:loc[1]],
+					Timestamp:   now,
+				}) {
+					break crossLoop
+				}
+			}
 		}
-		for _, loc := range p.RE().FindAllStringIndex(content, -1) {
-			lineNum := 1 + strings.Count(content[:loc[0]], "\n")
-			results = append(results, types.ScanResult{
-				FilePath:    path,
-				PatternName: p.Name,
-				Level:       p.Level,
-				LineNumber:  lineNum,
-				LineContent: truncateRunes(strings.TrimSpace(content[loc[0]:loc[1]]), 200),
-				MatchedText: content[loc[0]:loc[1]],
-				Timestamp:   now,
-			})
+	}
+	if len(results) > 0 {
+		for i := range results {
+			results[i].FileIssueCount = len(results)
+			results[i].FileIssueOverflow = overflow
+			if overflow {
+				results[i].FileIssueCount = maxFindingsPerFile
+			}
 		}
 	}
 	return results

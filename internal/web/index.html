@@ -118,7 +118,7 @@
     <span id="selCount" class="muted"></span>
   </div>
   <table>
-    <thead><tr><th style="width:28px;text-align:center"><input type="checkbox" id="selAll" onclick="toggleAll(this)" title="全选当前页"></th><th>级别</th><th>类型</th><th>文件</th><th>行</th><th>匹配内容</th></tr></thead>
+    <thead><tr><th style="width:28px;text-align:center"><input type="checkbox" id="selAll" onclick="toggleAll(this)" title="全选当前页"></th><th>最高级别</th><th>问题数</th><th>类型</th><th>文件</th><th>示例</th></tr></thead>
     <tbody id="results"></tbody>
   </table>
   <div class="pager" id="pager"></div>
@@ -344,6 +344,7 @@ async function loadPageWithOptions(page, opts) {
   const params = new URLSearchParams();
   params.set('offset', String((targetPage - 1) * PAGE_SIZE));
   params.set('limit', String(PAGE_SIZE));
+  params.set('group', 'file');
   if (filterLevel !== 'all') params.set('level', filterLevel);
   if (filterType !== 'all') params.set('type', filterType);
   if (filterKeyword) params.set('kw', filterKeyword);
@@ -354,7 +355,7 @@ async function loadPageWithOptions(page, opts) {
       renderPendingManualPage();
       return;
     }
-    pageResults = r.results || [];
+    pageResults = r.files || [];
     total = r.total || 0;
   } catch (e) {
     if (!opts.preserveOnError) {
@@ -393,14 +394,19 @@ function renderResults() {
   const tbody = document.getElementById('results');
   const frag = document.createDocumentFragment();
   for (const it of pageResults) {
+    const samples = (it.samples || []).map(s =>
+      `${escapeHtml(s.pattern_name)}: ${escapeHtml(shortMatch(s.matched_text || s.line_content || ''))}`
+    ).join('<br>');
+    const countText = `${it.issue_count || 0}${it.issue_overflow ? '+' : ''}`;
+    const types = (it.pattern_names || []).map(escapeHtml).join('、');
     const tr = document.createElement('tr');
     tr.innerHTML =
       `<td style="text-align:center"><input type="checkbox" class="row-sel" data-path="${escapeHtml(it.file_path)}"></td>` +
-      `<td class="lv-${it.level}">${lvName[it.level]||it.level}</td>` +
-      `<td>${escapeHtml(it.pattern_name)}</td>` +
+      `<td class="lv-${it.highest_level}">${lvName[it.highest_level]||it.highest_level}</td>` +
+      `<td>${countText}</td>` +
+      `<td>${types}</td>` +
       `<td class="muted" title="${escapeHtml(it.file_path)}">${escapeHtml(shortPath(it.file_path))}</td>` +
-      `<td>${it.line_number}</td>` +
-      `<td>${escapeHtml(it.matched_text)}</td>`;
+      `<td>${samples || '<span class="muted">无示例</span>'}</td>`;
     frag.appendChild(tr);
   }
   tbody.innerHTML = '';
@@ -411,7 +417,7 @@ function renderResults() {
 
   const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
   if (curPage > pages) curPage = pages;
-  document.getElementById('fcount').textContent = `共 ${total} 条`;
+  document.getElementById('fcount').textContent = `共 ${total} 个文件`;
 
   const pager = document.getElementById('pager');
   if (total === 0) {
@@ -534,6 +540,7 @@ function pickDir() {
 
 function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
 function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
+function shortMatch(s) { s = String(s||'').replace(/\s+/g, ' ').trim(); return s.length <= 80 ? s : s.slice(0, 77) + '...'; }
 function eventName(e) {
   return e === 'timeout' ? '超时'
     : e === 'timeout_backlog' ? '超时积压'

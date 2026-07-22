@@ -291,6 +291,15 @@ func (s *Server) handleResults(w http.ResponseWriter, r *http.Request) {
 		Keyword: q.Get("kw"),
 	}
 	sc := s.currentScanner()
+	if q.Get("group") == "file" {
+		files, total := sc.ResultsFilePage(offset, limit, f)
+		writeJSON(w, map[string]any{
+			"files": files,
+			"total": total,
+			"stats": sc.Stats(),
+		})
+		return
+	}
 	items, total := sc.ResultsPage(offset, limit, f)
 	writeJSON(w, map[string]any{
 		"results": items,
