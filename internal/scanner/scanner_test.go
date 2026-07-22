@@ -354,6 +354,27 @@ func TestFullDiskFastSkipsPythonRuntimeNoise(t *testing.T) {
 	}
 }
 
+func TestFullDiskFastSkipsSystemAndRootInstallDirs(t *testing.T) {
+	fast := New(Config{ScanProfile: ProfileFullDiskFast})
+	for _, path := range []string{
+		`C:\Windows\System32\config.txt`,
+		`C:\Program Files\App\config.ini`,
+		`C:\Program Files (x86)\App\config.ini`,
+		`C:\ProgramData\App\config.ini`,
+		`C:\System Volume Information\tracking.txt`,
+		`C:\Intel\Logs\config.txt`,
+		`C:\NodeJS\npmrc.txt`,
+		`C:\Anaconda3\Lib\site.py`,
+	} {
+		if ok, reason := fast.shouldScan(path); ok || reason != skipExcludedPath {
+			t.Fatalf("full disk install/system path should be excluded: %s ok=%v reason=%q", path, ok, reason)
+		}
+	}
+	if ok, reason := fast.shouldScan(`C:\Users\alice\projects\intel\config.txt`); !ok || reason != "" {
+		t.Fatalf("user project vendor-like directory should not be excluded, ok=%v reason=%q", ok, reason)
+	}
+}
+
 func TestFullDiskFastProfileDefaults(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "secrets.txt"),

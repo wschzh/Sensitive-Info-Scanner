@@ -4,34 +4,58 @@
 <meta charset="UTF-8">
 <title>敏感信息扫描工具</title>
 <style>
-  body { font-family: -apple-system, "Microsoft YaHei", sans-serif; margin: 20px; background: #f5f5f5; color: #333; }
-  h1 { font-size: 20px; }
-  .card { background: #fff; border-radius: 8px; padding: 16px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  :root { --bg:#f4f7fb; --panel:#fff; --line:#dfe7ef; --text:#1f2933; --muted:#6b7785; --blue:#256fae; --green:#1f8f4d; --red:#c0392b; --orange:#d35400; }
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif; margin: 0; background: var(--bg); color: var(--text); }
+  .app { max-width: 1280px; margin: 0 auto; padding: 20px; }
+  .topbar { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:14px; }
+  h1 { font-size: 22px; margin:0; letter-spacing:0; }
+  .card { background: var(--panel); border:1px solid var(--line); border-radius: 8px; padding: 16px; margin-bottom: 14px; box-shadow: 0 8px 24px rgba(28,47,73,.05); }
+  .card-title { font-size:15px; font-weight:700; margin-bottom:12px; display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .control-grid { display:grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap:10px 14px; align-items:end; }
+  .custom-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin-bottom:8px; }
+  .level-row { display:flex; flex-wrap:wrap; gap:10px; align-items:center; width:100%; }
+  .level-row label { white-space:nowrap; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; align-items:center; }
   label { display: inline-block; margin-right: 8px; }
-  input[type=text], input[type=number], select { padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
-  button { padding: 8px 16px; border: none; border-radius: 4px; background: #3498db; color: #fff; cursor: pointer; margin-right: 8px; }
-  button:disabled { background: #aaa; cursor: not-allowed; }
-  button.danger { background: #e74c3c; }
-  button.ghost { background: #7f8c8d; }
-  button.sm { padding: 4px 10px; margin: 0 4px; }
-  .progress { width: 100%; height: 18px; background: #eee; border-radius: 9px; overflow: hidden; }
-  .progress-bar { height: 100%; background: #3498db; transition: width .2s; width: 0; }
+  input[type=text], input[type=number], select { padding: 7px 9px; border: 1px solid #cbd6e2; border-radius: 6px; background:#fff; color:var(--text); }
+  button { padding: 8px 14px; border: none; border-radius: 6px; background: var(--blue); color: #fff; cursor: pointer; margin-right: 0; font-weight:600; }
+  button:hover:not(:disabled) { filter: brightness(.96); }
+  button:disabled { background: #a9b4bf; cursor: not-allowed; }
+  button.danger { background: var(--red); }
+  button.danger:disabled { background: #a9b4bf; }
+  button.ghost { background: #607180; }
+  button.secondary { background:#eef3f8; color:#263746; border:1px solid #cfdae5; }
+  button.sm { padding: 5px 10px; margin: 0 4px; font-size:12px; }
+  .progress { width: 100%; height: 12px; background: #e5ebf2; border-radius: 999px; overflow: hidden; }
+  .progress-bar { height: 100%; background: linear-gradient(90deg, #2878b5, #2ca86f); transition: width .2s; width: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th, td { border: 1px solid #ddd; padding: 6px; text-align: left; }
-  th { background: #f0f0f0; position: sticky; top: 0; }
+  th, td { border-bottom: 1px solid #e5ecf3; padding: 8px 9px; text-align: left; vertical-align:top; }
+  th { background: #edf3f8; position: sticky; top: 0; color:#425466; font-size:12px; }
+  tr:hover td { background:#fafcff; }
   .lv-critical { color: #e74c3c; font-weight: bold; }
   .lv-high { color: #e67e22; font-weight: bold; }
   .lv-medium { color: #b7950b; }
   .lv-low { color: #3498db; }
   .stats span { margin-right: 16px; }
-  .muted { color: #888; font-size: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
   .warn { color: #e67e22; font-weight: bold; }
-  .toolbar { margin-bottom: 10px; padding: 8px; background: #fafafa; border-radius: 6px; font-size: 13px; }
+  .status-pill { display: inline-block; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; margin-right: 10px; background: #ecf0f1; color: #666; }
+  .status-pill.running { background: #eaf4fc; color: #2878b5; }
+  .status-pill.done { background: #e9f7ef; color: #1f8f4d; }
+  .status-pill.stopped { background: #fff3cd; color: #9a6b00; }
+  .summary-grid { display:grid; grid-template-columns: repeat(4, minmax(120px, 1fr)); gap:10px; margin-bottom:12px; }
+  .metric { border:1px solid #e1e8f0; border-radius:8px; padding:10px; background:#fbfdff; }
+  .metric b { display:block; font-size:22px; margin-bottom:2px; }
+  .summary-columns { display:grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.4fr); gap:16px; }
+  .mini-list { margin:0; padding-left:18px; color:#405060; font-size:13px; }
+  .mini-list li { margin:5px 0; }
+  .toolbar { margin-bottom: 10px; padding: 10px; background: #f8fafc; border:1px solid #e5ecf3; border-radius: 8px; font-size: 13px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .toolbar select { margin: 0 4px; }
   .pager { margin-top: 10px; text-align: center; color: #666; font-size: 13px; }
-  .tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid #e0e0e0; }
-  .tab { padding: 8px 24px; background: #e0e0e0; border: none; border-radius: 6px 6px 0 0; cursor: pointer; color: #333; margin: 0; }
-  .tab.active { background: #3498db; color: #fff; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
+  .tab { padding: 9px 22px; background: transparent; border: none; border-radius: 6px 6px 0 0; cursor: pointer; color: #405060; margin: 0; }
+  .tab.active { background: #fff; color: var(--blue); border:1px solid var(--line); border-bottom-color:#fff; }
   .rule-level-title { font-size: 15px; font-weight: bold; margin: 16px 0 6px; }
   .rule-card { background: #fff; border-left: 4px solid #3498db; padding: 10px 12px; margin-bottom: 8px; border-radius: 4px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   .rule-regex { font-family: "SF Mono", Consolas, monospace; background: #f5f5f5; padding: 6px 8px; border-radius: 3px; word-break: break-all; font-size: 12px; margin: 4px 0; }
@@ -43,10 +67,22 @@
   .browser-list { overflow: auto; max-height: 50vh; border: 1px solid #eee; border-radius: 4px; }
   .browser-item { padding: 6px 10px; cursor: pointer; font-size: 13px; }
   .browser-item:hover { background: #eef5fb; }
+  .footer { text-align:right; color:#9aa7b4; font-size:12px; padding:4px 2px 0; }
+  @media (max-width: 820px) {
+    .app { padding: 12px; }
+    .topbar, .summary-columns { display:block; }
+    .control-grid, .summary-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
-<h1>🔍 敏感信息扫描工具</h1>
+<div class="app">
+<div class="topbar">
+  <div>
+    <h1>敏感信息扫描工具</h1>
+  </div>
+  <button class="ghost" onclick="exitApp()">退出程序</button>
+</div>
 
 <div class="tabs">
   <button class="tab active" data-tab="scan" onclick="switchTab('scan')">扫描</button>
@@ -56,6 +92,8 @@
 <!-- ===== 扫描页 ===== -->
 <div id="tab-scan" class="tab-panel">
 <div class="card">
+  <div class="card-title">扫描设置</div>
+  <div class="control-grid">
   <div>
     <label>扫描方式:
       <select id="profile" onchange="applyProfilePreset()">
@@ -64,37 +102,63 @@
       </select>
     </label>
   </div>
-  <div id="pathRow" style="margin-top:8px"><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
+  <div id="pathRow"><label>扫描路径: <input type="text" id="path" size="55" placeholder="文件或目录的绝对路径"></label>
     <button type="button" class="ghost sm" onclick="openBrowser()">浏览…</button>
   </div>
-  <div id="customOptions" style="margin-top:8px">
-    <label>扫描速度:
-      <select id="walkEngine">
-        <option value="std">标准</option>
-        <option value="fastwalk">快速</option>
-      </select>
-    </label>
-    <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
-    <label>最大文件(MB): <input type="number" id="maxsize" value="10" style="width:60px"></label>
-    级别:
-    <label><input type="checkbox" class="lvl" value="critical" checked>严重</label>
-    <label><input type="checkbox" class="lvl" value="high" checked>高级</label>
-    <label><input type="checkbox" class="lvl" value="medium">中级</label>
-    <label><input type="checkbox" class="lvl" value="low">低级</label>
+  <div id="customOptions">
+    <div class="custom-row">
+      <label>扫描速度:
+        <select id="walkEngine">
+          <option value="std">标准</option>
+          <option value="fastwalk">快速</option>
+        </select>
+      </label>
+      <label><input type="checkbox" id="recursive" checked> 递归子目录</label>
+      <label>最大文件(MB): <input type="number" id="maxsize" value="10" style="width:60px"></label>
+    </div>
+    <div class="level-row">
+      <span class="muted">扫描级别</span>
+      <label><input type="checkbox" class="lvl" value="critical" checked> 严重</label>
+      <label><input type="checkbox" class="lvl" value="high" checked> 高级</label>
+      <label><input type="checkbox" class="lvl" value="medium"> 中级</label>
+      <label><input type="checkbox" class="lvl" value="low"> 低级</label>
+    </div>
+  </div>
   </div>
   <div id="scanHint" class="muted" style="margin-top:6px"></div>
-  <div style="margin-top:10px">
+  <div class="actions">
     <button id="btnScan" onclick="startScan()">开始扫描</button>
     <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
-    <button class="ghost" onclick="exportReport('text')">导出 Text</button>
-    <button class="ghost" onclick="exportReport('json')">导出 JSON</button>
-    <button class="ghost" onclick="exitApp()" style="float:right">退出程序</button>
+    <button class="secondary" onclick="exportReport('text')">Text</button>
+    <button class="secondary" onclick="exportReport('md')">Markdown</button>
+    <button class="secondary" onclick="exportReport('html')">HTML</button>
+    <button class="secondary" onclick="exportReport('xlsx')">Excel</button>
+    <button class="secondary" onclick="exportReport('json')">JSON</button>
   </div>
 </div>
 
 <div class="card">
   <div class="progress"><div class="progress-bar" id="bar"></div></div>
-  <div class="stats" id="stats" style="margin-top:8px">就绪</div>
+  <div class="stats" style="margin-top:8px"><span id="scanStatus" class="status-pill">就绪</span><span id="stats">等待开始扫描</span></div>
+</div>
+
+<div class="card" id="summaryCard" style="display:none">
+  <div class="card-title">
+    <span>扫描总结</span>
+    <button type="button" class="danger sm" id="summaryDeleteBtn" onclick="focusDelete()">选择文件删除</button>
+  </div>
+  <div class="summary-grid" id="summaryMetrics"></div>
+  <div class="summary-columns">
+    <div>
+      <b>问题分类</b>
+      <ul class="mini-list" id="summaryTypes"></ul>
+    </div>
+    <div>
+      <b>问题集中在这些文件</b>
+      <ul class="mini-list" id="summaryFiles"></ul>
+      <div class="muted" id="summaryAdvice" style="margin-top:8px"></div>
+    </div>
+  </div>
 </div>
 
 <div class="card">
@@ -136,7 +200,8 @@
   </div>
 </div>
 
-<div style="text-align:center;color:#999;font-size:13px;padding:8px 0 4px">powered by cz</div>
+<div class="footer">powered by cz</div>
+</div>
 
 <!-- 目录选择弹层 -->
 <div id="browser" class="modal">
@@ -171,7 +236,9 @@ let refreshingResults = false;
 let pendingManualPage = null;
 let lastScannedCount = 0;
 let lastProgressChangeAt = Date.now();
+let latestStats = null;
 applyProfilePreset();
+setScanState('idle');
 
 // ===== Tab 切换 =====
 function switchTab(name) {
@@ -248,16 +315,20 @@ async function startScan() {
   const res = await fetch('/api/scan', {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body)});
   if (!res.ok) { document.getElementById('btnScan').disabled = false; alert(await res.text()); return; }
   scanning = true;
+  setScanState('running');
+  hideSummary();
   pageResults = []; total = 0; curPage = 1;
   lastResultRefresh = 0;
   lastScannedCount = 0;
   lastProgressChangeAt = Date.now();
   renderResults();
-  document.getElementById('btnStop').disabled = false;
   poll();
 }
 
-function stopScan() { fetch('/api/stop', {method:'POST'}); }
+function stopScan() {
+  setScanState('stopping');
+  fetch('/api/stop', {method:'POST'});
+}
 
 function exitApp() {
   if (!confirm('确定退出程序？退出后需重新运行才能再次使用。')) return;
@@ -290,12 +361,13 @@ async function poll() {
       ? `<span class="warn">已 ${stallSec}s 无新增，活跃文件：${active || '无'}${recent ? '；最近事件：' + recent : ''}</span>` : '';
     const stopReason = r.stats && r.stats.stop_reason
       ? `<span class="warn">扫描已停止：${stopReasonName(r.stats.stop_reason)}</span>` : '';
+    const logText = r.log_path ? `<span class="muted">日志: ${escapeHtml(r.log_path)}</span>` : '';
+    latestStats = r.stats || null;
     document.getElementById('stats').innerHTML =
       `<span>进度: ${r.progress}%</span><span class="muted">${escapeHtml(r.current_file||'')}</span>` +
       `<span>已扫描: ${r.scanned}/${r.total||'?'}</span>` +
       `<span>已跳过: ${(r.stats.skipped_files||0)} 文件 / ${(r.stats.skipped_dirs||0)} 目录</span>` +
-      `<span>问题: ${r.stats.total_issues}</span>` +
-      `<span class="muted">日志: ${escapeHtml(r.log_path || '')}</span>${trunc}${stopReason}${stall}`;
+      `<span>问题: ${r.stats.total_issues}</span>${logText}${trunc}${stopReason}${stall}`;
     const now = Date.now();
     if (now - lastResultRefresh > 1000) {
       lastResultRefresh = now;
@@ -303,13 +375,114 @@ async function poll() {
     }
     if (!r.scanning) {
       scanning = false;
-      document.getElementById('btnScan').disabled = false;
-      document.getElementById('btnStop').disabled = true;
+      setScanState(r.stats && r.stats.stop_reason ? 'stopped' : 'done');
       await loadPage(1);
+      await loadSummary();
       return;
     }
   } catch(e) {}
   setTimeout(poll, 500);
+}
+
+async function loadSummary() {
+  try {
+    const r = await fetchJSON('/api/summary', {}, 5000);
+    renderSummary(r);
+  } catch (e) {
+    document.getElementById('summaryCard').style.display = '';
+    document.getElementById('summaryMetrics').innerHTML = '<div class="muted">总结加载失败，但扫描结果仍可查看和导出。</div>';
+  }
+}
+
+function hideSummary() {
+  document.getElementById('summaryCard').style.display = 'none';
+  document.getElementById('summaryMetrics').innerHTML = '';
+  document.getElementById('summaryTypes').innerHTML = '';
+  document.getElementById('summaryFiles').innerHTML = '';
+  document.getElementById('summaryAdvice').textContent = '';
+}
+
+function renderSummary(data) {
+  const st = data.stats || {};
+  document.getElementById('summaryCard').style.display = '';
+  const metrics = [
+    ['已扫描', st.scanned_files || 0],
+    ['发现问题', st.total_issues || 0],
+    ['问题文件', st.files_with_issues || 0],
+    ['已跳过', `${st.skipped_files || 0} / ${st.skipped_dirs || 0}`],
+  ];
+  document.getElementById('summaryMetrics').innerHTML = metrics.map(m =>
+    `<div class="metric"><b>${escapeHtml(m[1])}</b><span class="muted">${escapeHtml(m[0])}</span></div>`
+  ).join('');
+
+  const levels = data.levels || {};
+  const types = Object.entries(data.types || {}).sort((a,b) => b[1] - a[1]).slice(0, 8);
+  const levelLine = ['critical','high','medium','low']
+    .filter(lv => levels[lv] > 0)
+    .map(lv => `${lvName[lv]} ${levels[lv]}`)
+    .join('，');
+  const typeItems = [];
+  if (levelLine) typeItems.push(`<li>级别分布：${escapeHtml(levelLine)}</li>`);
+  for (const [name, count] of types) typeItems.push(`<li>${escapeHtml(name)}：${count}</li>`);
+  document.getElementById('summaryTypes').innerHTML = typeItems.join('') || '<li>未发现敏感信息</li>';
+
+  const files = data.top_files || [];
+  document.getElementById('summaryFiles').innerHTML = files.map(f => {
+    const count = `${f.issue_count || 0}${f.issue_overflow ? '+' : ''}`;
+    return `<li><span class="lv-${f.highest_level}">${lvName[f.highest_level] || f.highest_level}</span> ` +
+      `${count} 个问题 · ${escapeHtml(shortPath(f.file_path))}</li>`;
+  }).join('') || '<li>暂无问题文件</li>';
+  document.getElementById('summaryAdvice').textContent = (st.files_with_issues || 0) > 0
+    ? '建议先导出报告留存，再在下方结果表中勾选确认无误的文件进行删除。'
+    : '本次扫描未发现需要处理的问题文件。';
+  document.getElementById('summaryDeleteBtn').style.display = (st.files_with_issues || 0) > 0 ? '' : 'none';
+}
+
+function focusDelete() {
+  document.getElementById('results').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function setScanState(state) {
+  const status = document.getElementById('scanStatus');
+  const btnScan = document.getElementById('btnScan');
+  const btnStop = document.getElementById('btnStop');
+  status.className = 'status-pill';
+  if (state === 'running') {
+    status.textContent = '扫描中';
+    status.classList.add('running');
+    btnScan.disabled = true;
+    btnStop.disabled = false;
+    btnStop.textContent = '停止';
+    return;
+  }
+  if (state === 'stopping') {
+    status.textContent = '正在停止';
+    status.classList.add('stopped');
+    btnScan.disabled = true;
+    btnStop.disabled = true;
+    btnStop.textContent = '正在停止';
+    return;
+  }
+  if (state === 'stopped') {
+    status.textContent = '已停止';
+    status.classList.add('stopped');
+    btnScan.disabled = false;
+    btnStop.disabled = true;
+    btnStop.textContent = '已结束';
+    return;
+  }
+  if (state === 'done') {
+    status.textContent = '扫描完成';
+    status.classList.add('done');
+    btnScan.disabled = false;
+    btnStop.disabled = true;
+    btnStop.textContent = '已结束';
+    return;
+  }
+  status.textContent = '就绪';
+  btnScan.disabled = false;
+  btnStop.disabled = true;
+  btnStop.textContent = '停止';
 }
 
 function applyProfilePreset() {
@@ -357,6 +530,7 @@ async function loadPageWithOptions(page, opts) {
     }
     pageResults = r.files || [];
     total = r.total || 0;
+    latestStats = r.stats || latestStats;
   } catch (e) {
     if (!opts.preserveOnError) {
       pageResults = []; total = 0;
@@ -547,7 +721,8 @@ function eventName(e) {
     : e === 'done' ? '完成' : e;
 }
 function stopReasonName(r) {
-  return r === 'memory_guard' ? '内存保护' : r;
+  return r === 'memory_guard' ? '内存保护'
+    : r === 'user_stop' ? '用户停止' : r;
 }
 function escapeHtml(s) {
   return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));

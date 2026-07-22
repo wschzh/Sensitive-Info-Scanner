@@ -3,12 +3,16 @@
 package scanner
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"runtime/debug"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -20,6 +24,7 @@ import (
 	"sensitivescanner/internal/extract"
 	"sensitivescanner/internal/patterns"
 	"sensitivescanner/internal/types"
+	"sensitivescanner/internal/workerproto"
 )
 
 const (
@@ -35,6 +40,8 @@ const (
 	maxMatchesPerLine           = 5000              // 每行每 pattern 最多记录匹配数（防 minified 巨行拖慢）
 	lineContextPad              = 80                // LineContent 在匹配位置左右各取的字节数
 	minifiedLineThreshold       = 4096              // 单行超过此字节数视为压缩/编译产物，跳过（噪音）
+	workerStdoutLimit           = 1 * 1024 * 1024
+	workerStderrLimit           = 64 * 1024
 )
 
 const (
@@ -61,6 +68,8 @@ const (
 	skipTimeoutBacklog  = "timeout_backlog"
 	skipTextTooLarge    = "text_too_large"
 	skipRichTooLarge    = "rich_too_large"
+	skipRichWorkerError = "rich_worker_error"
+	skipRichWorkerLimit = "rich_worker_limit"
 )
 
 // ResultFilter 分页查询的筛选条件（服务端筛选，避免前端全量驻留）。
@@ -129,6 +138,32 @@ type ScanEvent struct {
 	Path    string    `json:"path"`
 	Seconds int       `json:"seconds,omitempty"`
 }
+
+type limitedBuffer struct {
+	buf       bytes.Buffer
+	limit     int
+	truncated bool
+}
+
+func (b *limitedBuffer) Write(p []byte) (int, error) {
+	if b.limit <= 0 {
+		return len(p), nil
+	}
+	remaining := b.limit - b.buf.Len()
+	if remaining <= 0 {
+		b.truncated = true
+		return len(p), nil
+	}
+	if len(p) > remaining {
+		b.truncated = true
+		_, _ = b.buf.Write(p[:remaining])
+		return len(p), nil
+	}
+	_, _ = b.buf.Write(p)
+	return len(p), nil
+}
+
+func (b *limitedBuffer) String() string { return b.buf.String() }
 
 // New 创建扫描器。
 func New(cfg Config) *Scanner {
@@ -778,6 +813,10 @@ func (s *Scanner) walkDir(ctx context.Context, root string, recursive bool, file
 				return filepath.SkipDir
 			}
 			if d.IsDir() {
+				if path != root && s.cfg.ScanProfile == ProfileFullDiskFast && isFullDiskFastExcludedDirPath(path) {
+					s.addSkipped(true, skipExcludedDir)
+					return filepath.SkipDir
+				}
 				if path != root && patterns.IsExcludedDir(d.Name()) {
 					s.addSkipped(true, skipExcludedDir)
 					return filepath.SkipDir
@@ -843,6 +882,9 @@ func levelPriority(l types.Level) int {
 
 // ScanFile 扫描单个文件，返回命中的结果。
 func (s *Scanner) ScanFile(path string) []types.ScanResult {
+	if s.shouldUseRichWorker(path) {
+		return s.scanRichFileWorker(path)
+	}
 	content, ok := s.readFile(path)
 	if !ok || content == "" {
 		return nil
@@ -850,7 +892,175 @@ func (s *Scanner) ScanFile(path string) []types.ScanResult {
 	if isMinified(content) {
 		return nil // 跳过压缩/编译产物（minified JS/CSS 等），其中 URL/IP/数字多为字面量噪音
 	}
-	return s.matchContent(path, content)
+	return s.MatchContent(path, content)
+}
+
+func (s *Scanner) shouldUseRichWorker(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".pdf", ".docx", ".xlsx":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Scanner) scanRichFileWorker(path string) []types.ScanResult {
+	ext := strings.TrimPrefix(strings.ToLower(filepath.Ext(path)), ".")
+	if ok := s.preflightFile(path, true); !ok {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker executable error path=%q err=%v", path, err)
+		return nil
+	}
+
+	timeout := s.cfg.PerFileTimeout
+	if timeout <= 0 {
+		timeout = perFileTimeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req := workerproto.Request{
+		Path:          path,
+		Format:        ext,
+		Levels:        s.cfg.ScanLevels,
+		Mode:          s.cfg.ScanProfile,
+		MaxTextSize:   s.cfg.MaxTextSize,
+		MaxFindings:   maxFindingsPerFile,
+		TimeoutMillis: timeout.Milliseconds(),
+		MemoryLimitMB: richWorkerMemoryLimitMB(s.cfg.ScanProfile),
+		StartedAt:     time.Now(),
+	}
+	payload, err := json.Marshal(req)
+	if err != nil {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker request marshal error path=%q err=%v", path, err)
+		return nil
+	}
+
+	var stdout limitedBuffer
+	stdout.limit = workerStdoutLimit
+	var stderr limitedBuffer
+	stderr.limit = workerStderrLimit
+	cmd := exec.CommandContext(ctx, exe, workerproto.Arg)
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	cmd.Env = append(os.Environ(),
+		"GOMEMLIMIT="+memoryLimitEnv(req.MemoryLimitMB),
+		"GOGC=80",
+	)
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker stdin pipe error path=%q err=%v", path, err)
+		return nil
+	}
+	start := time.Now()
+	if err = cmd.Start(); err != nil {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker start error path=%q err=%v", path, err)
+		return nil
+	}
+	cleanupLimit, limitErr := attachProcessLimit(cmd.Process, req.MemoryLimitMB)
+	if limitErr != nil {
+		diag.Printf("rich worker process limit warning path=%q err=%v", path, limitErr)
+	}
+	if _, err = stdin.Write(payload); err != nil {
+		_ = stdin.Close()
+		_ = cmd.Process.Kill()
+		if cleanupLimit != nil {
+			cleanupLimit()
+		}
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker stdin write error path=%q err=%v", path, err)
+		return nil
+	}
+	_ = stdin.Close()
+	err = cmd.Wait()
+	if cleanupLimit != nil {
+		cleanupLimit()
+	}
+	duration := time.Since(start)
+	if ctx.Err() != nil {
+		s.addSkipped(false, skipTimeout)
+		diag.Printf("rich worker timeout seconds=%d path=%q stderr=%q",
+			int(duration.Seconds()), path, truncateRunes(stderr.String(), 500))
+		return nil
+	}
+	if stdout.truncated {
+		s.addSkipped(false, skipRichWorkerLimit)
+		diag.Printf("rich worker stdout limit path=%q bytes=%d stderr=%q", path, workerStdoutLimit, truncateRunes(stderr.String(), 500))
+		return nil
+	}
+	if err != nil && stdout.buf.Len() == 0 {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker run error seconds=%d path=%q err=%v stderr=%q",
+			int(duration.Seconds()), path, err, truncateRunes(stderr.String(), 500))
+		return nil
+	}
+
+	var resp workerproto.Response
+	if decErr := json.Unmarshal(stdout.buf.Bytes(), &resp); decErr != nil {
+		s.addSkipped(false, skipRichWorkerError)
+		diag.Printf("rich worker decode error path=%q err=%v raw=%q stderr=%q",
+			path, decErr, truncateRunes(stdout.String(), 500), truncateRunes(stderr.String(), 500))
+		return nil
+	}
+	if resp.Status != "completed" {
+		if resp.Status == "too_large" {
+			s.addSkipped(false, skipTextTooLarge)
+		} else {
+			s.addSkipped(false, skipRichWorkerError)
+		}
+		diag.Printf("rich worker status=%s seconds=%d path=%q error=%q stderr=%q",
+			resp.Status, int(duration.Seconds()), path, resp.Error, truncateRunes(stderr.String(), 500))
+		return nil
+	}
+	diag.Printf("rich worker done seconds=%d path=%q findings=%d overflow=%v",
+		int(duration.Seconds()), path, len(resp.Findings), resp.IssueOverflow)
+	return resp.Findings
+}
+
+func (s *Scanner) preflightFile(path string, rich bool) bool {
+	ext := strings.ToLower(filepath.Ext(path))
+	if patterns.IsExcludedFileName(filepath.Base(path)) || !patterns.IsScannableExt(ext) {
+		return false
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		s.addSkipped(false, skipInaccessible)
+		return false
+	}
+	if !fi.Mode().IsRegular() {
+		s.addSkipped(false, skipNonRegular)
+		return false
+	}
+	if s.cfg.MaxFileSize > 0 && fi.Size() > s.cfg.MaxFileSize {
+		s.addSkipped(false, skipTooLarge)
+		return false
+	}
+	if rich && s.cfg.MaxRichFileSize > 0 && fi.Size() > s.cfg.MaxRichFileSize {
+		s.addSkipped(false, skipRichTooLarge)
+		return false
+	}
+	return true
+}
+
+func richWorkerMemoryLimitMB(profile string) int {
+	if profile == ProfileFullDiskFast {
+		return 384
+	}
+	return 512
+}
+
+func memoryLimitEnv(mb int) string {
+	if mb <= 0 {
+		return "0"
+	}
+	return strconv.Itoa(mb) + "MiB"
 }
 
 // isMinified 判断是否为压缩/编译产物：存在单行超过 minifiedLineThreshold 字节。
@@ -935,10 +1145,10 @@ func (s *Scanner) limitExtractedText(content string, err error) (string, bool) {
 	return content, true
 }
 
-// matchContent 匹配文本：单行模式对全文一次性匹配（比逐行 × N pattern 快得多，
+// MatchContent 匹配文本：单行模式对全文一次性匹配（比逐行 × N pattern 快得多，
 // 尤其是行数多的大文件——避免「行数 × pattern 数」次 FindAllStringIndex 调用），
 // 跨行模式（如私钥）整段匹配。LineContent 只取匹配附近（防止单行巨文件每条结果存整行）。
-func (s *Scanner) matchContent(path, content string) []types.ScanResult {
+func (s *Scanner) MatchContent(path, content string) []types.ScanResult {
 	var results []types.ScanResult
 	now := time.Now()
 	lineStarts := computeLineStarts(content)
@@ -1023,6 +1233,10 @@ singleLoop:
 		}
 	}
 	return results
+}
+
+func (s *Scanner) matchContent(path, content string) []types.ScanResult {
+	return s.MatchContent(path, content)
 }
 
 func validPatternMatch(patternName, matched, line string) bool {
@@ -1171,6 +1385,9 @@ func truncateRunes(s string, n int) string {
 }
 
 func (s *Scanner) shouldScan(path string) (bool, string) {
+	if s.cfg.ScanProfile == ProfileFullDiskFast && isFullDiskFastExcludedDirPath(path) {
+		return false, skipExcludedPath
+	}
 	if s.pathHasExcludedKeyword(path) {
 		return false, skipExcludedPath
 	}
@@ -1185,6 +1402,51 @@ func (s *Scanner) shouldScan(path string) (bool, string) {
 		return false, skipUnsupportedExt
 	}
 	return true, ""
+}
+
+func isFullDiskFastExcludedDirPath(path string) bool {
+	parts := pathPartsLower(path)
+	for i, part := range parts {
+		if isFullDiskSystemOrInstallDir(part) {
+			return true
+		}
+		if i == 1 && (isRootLevelRuntimeInstallDir(part) || isRootLevelVendorInstallDir(part)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isFullDiskSystemOrInstallDir(part string) bool {
+	switch part {
+	case "windows", "program files", "program files (x86)", "programdata",
+		"system volume information", "$recycle.bin", "recovery", "perflogs":
+		return true
+	default:
+		return false
+	}
+}
+
+func isRootLevelRuntimeInstallDir(part string) bool {
+	if isPythonInstallDir(part) {
+		return true
+	}
+	if part == "nodejs" || part == "anaconda3" || part == "miniconda3" || part == "mingw64" || part == "mingw32" {
+		return true
+	}
+	if strings.HasPrefix(part, "jdk") || strings.HasPrefix(part, "java") {
+		return true
+	}
+	return false
+}
+
+func isRootLevelVendorInstallDir(part string) bool {
+	switch part {
+	case "intel", "amd", "nvidia", "dell", "hp", "lenovo":
+		return true
+	default:
+		return false
+	}
 }
 
 func isPythonRuntimeNoisePath(path string) bool {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -78,6 +79,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/progress", s.handleProgress)
 	mux.HandleFunc("/api/results", s.handleResults)
 	mux.HandleFunc("/api/results/since", s.handleResultsSince)
+	mux.HandleFunc("/api/summary", s.handleSummary)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/report", s.handleReport)
 	mux.HandleFunc("/api/browse", s.handleBrowse)
@@ -121,6 +123,9 @@ func (s *Server) handleScan(w http.ResponseWriter, r *http.Request) {
 	if len(paths) == 0 {
 		http.Error(w, "path 不能为空", http.StatusBadRequest)
 		return
+	}
+	if isBroadRootScan(paths) {
+		req.Recursive = true
 	}
 	cfg := scanConfig(req, paths)
 
@@ -169,6 +174,8 @@ func scanConfig(req scanRequest, paths []string) scanner.Config {
 		workers = 4
 		timeout = 30 * time.Second
 		maxTextSize = 4 * 1024 * 1024
+		req.Levels = []types.Level{types.Critical, types.High}
+		req.WalkEngine = scanner.WalkEngineFastwalk
 	}
 	return scanner.Config{
 		MaxFileSize:    req.MaxSize,
@@ -184,6 +191,9 @@ func scanConfig(req scanRequest, paths []string) scanner.Config {
 
 func isBroadRootScan(paths []string) bool {
 	for _, p := range paths {
+		if isWindowsDriveRoot(p) {
+			return true
+		}
 		clean := filepath.Clean(p)
 		vol := filepath.VolumeName(clean)
 		if vol == "" {
@@ -195,6 +205,19 @@ func isBroadRootScan(paths []string) bool {
 		}
 	}
 	return false
+}
+
+func isWindowsDriveRoot(p string) bool {
+	clean := strings.TrimSpace(p)
+	if len(clean) < 3 || clean[1] != ':' {
+		return false
+	}
+	drive := clean[0]
+	if !((drive >= 'A' && drive <= 'Z') || (drive >= 'a' && drive <= 'z')) {
+		return false
+	}
+	rest := strings.TrimRight(clean[2:], `\/`)
+	return rest == ""
 }
 
 func (s *Server) logScanWatchdog(sc *scanner.Scanner, done <-chan struct{}) {
@@ -268,6 +291,10 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 	if total > 0 {
 		pct = scanned * 100 / total
 	}
+	logPath := ""
+	if diag.Enabled() {
+		logPath = diag.LogPath()
+	}
 	writeJSON(w, map[string]any{
 		"progress":      pct,     // 兼容旧前端百分比
 		"scanned":       scanned, // 已扫描文件数
@@ -277,7 +304,7 @@ func (s *Server) handleProgress(w http.ResponseWriter, r *http.Request) {
 		"recent_events": sc.RecentEvents(),
 		"scanning":      scanning,
 		"stats":         stats, // 含 truncated_count / truncated_by_level
-		"log_path":      diag.LogPath(),
+		"log_path":      logPath,
 	})
 }
 
@@ -319,8 +346,41 @@ func (s *Server) handleResultsSince(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
-	s.currentScanner().Stop()
+	s.currentScanner().StopWithReason("user_stop")
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleSummary(w http.ResponseWriter, r *http.Request) {
+	sc := s.currentScanner()
+	stats := sc.Stats()
+	files := sc.ResultsByFile(scanner.ResultFilter{})
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].IssueCount != files[j].IssueCount {
+			return files[i].IssueCount > files[j].IssueCount
+		}
+		return levelRank(files[i].HighestLevel) < levelRank(files[j].HighestLevel)
+	})
+	if len(files) > 8 {
+		files = files[:8]
+	}
+	typeCounts := make(map[string]int)
+	for _, r := range sc.Results() {
+		typeCounts[r.PatternName]++
+	}
+	writeJSON(w, map[string]any{
+		"stats":       stats,
+		"levels":      stats.IssuesByLevel,
+		"types":       typeCounts,
+		"top_files":   files,
+		"delete_hint": stats.FilesWithIssues > 0,
+	})
+}
+
+func levelRank(l types.Level) int {
+	if cfg, ok := types.LevelConfig[l]; ok {
+		return cfg.Priority
+	}
+	return 99
 }
 
 // handleExit 退出整个程序（解决 Windows GUI 关闭浏览器后进程残留、无法删除 exe 的问题）。
@@ -425,21 +485,40 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	sc := s.currentScanner()
-	format := report.Text
-	if r.URL.Query().Get("format") == "json" {
-		format = report.JSON
+	rawFormat := r.URL.Query().Get("format")
+	format := report.Format(rawFormat)
+	if rawFormat == "excel" {
+		format = report.XLSX
+	}
+	if format == "" {
+		format = report.Text
+	}
+	switch format {
+	case report.JSON, report.HTML, report.MD, report.XLSX, report.Text:
+	default:
+		format = report.Text
 	}
 	contentType := "text/plain; charset=utf-8"
 	ext := "txt"
-	if format == report.JSON {
+	switch format {
+	case report.JSON:
 		contentType = "application/json; charset=utf-8"
 		ext = "json"
+	case report.HTML:
+		contentType = "text/html; charset=utf-8"
+		ext = "html"
+	case report.MD:
+		contentType = "text/markdown; charset=utf-8"
+		ext = "md"
+	case report.XLSX:
+		contentType = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+		ext = "xlsx"
 	}
 	// Header 必须在写 body 前设好（流式输出后不能再改 Header）
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition",
 		fmt.Sprintf("attachment; filename=scan-report-%s.%s", time.Now().Format("20060102"), ext))
-	if format == report.Text {
+	if format == report.Text || format == report.MD {
 		_, _ = w.Write([]byte{0xEF, 0xBB, 0xBF}) // UTF-8 BOM（text 格式，避免中文乱码）
 	}
 	_ = report.GenerateTo(sc, format, w) // 流式写 HTTP 响应，不累积全量字符串

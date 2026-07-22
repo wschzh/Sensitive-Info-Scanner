@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -14,6 +15,12 @@ var (
 	mu      sync.Mutex
 	logPath string
 )
+
+// Enabled reports whether file diagnostics are enabled. Stable GUI builds keep
+// this off by default to avoid creating scanner-debug.log during normal use.
+func Enabled() bool {
+	return os.Getenv("SCANNER_DEBUG") == "1" || strings.EqualFold(os.Getenv("SCANNER_DEBUG"), "true")
+}
 
 // LogPath returns the diagnostic log path next to the executable so Windows GUI
 // users can find it without digging through AppData. It falls back to the
@@ -41,6 +48,9 @@ func LogPath() string {
 // Printf appends a single timestamped diagnostic line. Logging failures are
 // intentionally ignored so diagnostics never affect scanning.
 func Printf(format string, args ...any) {
+	if !Enabled() {
+		return
+	}
 	line := fmt.Sprintf(format, args...)
 	path := LogPath()
 	mu.Lock()

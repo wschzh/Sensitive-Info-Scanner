@@ -6,12 +6,19 @@ package main
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"sensitivescanner/internal/web"
+	"sensitivescanner/internal/worker"
+	"sensitivescanner/internal/workerproto"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == workerproto.Arg {
+		os.Exit(worker.RunExtractWorker(os.Stdin, os.Stdout))
+	}
+
 	srv := web.NewServer()
 	addr, err := srv.Start()
 	if err != nil {

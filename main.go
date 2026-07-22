@@ -17,6 +17,8 @@ import (
 	"sensitivescanner/internal/report"
 	"sensitivescanner/internal/scanner"
 	"sensitivescanner/internal/types"
+	"sensitivescanner/internal/worker"
+	"sensitivescanner/internal/workerproto"
 )
 
 // levelFlag 实现 flag.Value，支持 -level 多选。
@@ -40,6 +42,10 @@ func (l *levelFlag) Set(v string) error {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == workerproto.Arg {
+		os.Exit(worker.RunExtractWorker(os.Stdin, os.Stdout))
+	}
+
 	interactive := flag.Bool("i", false, "进入交互模式")
 	recursive := flag.Bool("recursive", true, "递归扫描子目录")
 	output := flag.String("o", "", "输出报告文件路径")

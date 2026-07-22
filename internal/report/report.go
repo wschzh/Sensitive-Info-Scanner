@@ -5,10 +5,13 @@ package report
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"os"
 	"strings"
 	"unicode"
+
+	"github.com/xuri/excelize/v2"
 
 	"sensitivescanner/internal/scanner"
 	"sensitivescanner/internal/types"
@@ -20,16 +23,27 @@ type Format string
 const (
 	Text Format = "text"
 	JSON Format = "json"
+	HTML Format = "html"
+	MD   Format = "md"
+	XLSX Format = "xlsx"
 )
 
 const sep = "================================================================================"
 
 // GenerateTo 按 format 流式生成报告到 w（不累积全量字符串，适合 HTTP 响应/大结果集）。
 func GenerateTo(s *scanner.Scanner, format Format, w io.Writer) error {
-	if format == JSON {
+	switch format {
+	case JSON:
 		return genJSONTo(s, w)
+	case HTML:
+		return genHTMLTo(s, w)
+	case MD:
+		return genMarkdownTo(s, w)
+	case XLSX:
+		return genXLSXTo(s, w)
+	default:
+		return genTextTo(s, w)
 	}
-	return genTextTo(s, w)
 }
 
 // GenerateToFile 生成报告到文件；text 格式先写 UTF-8 BOM。
@@ -39,7 +53,7 @@ func GenerateToFile(s *scanner.Scanner, format Format, path string) error {
 		return err
 	}
 	defer f.Close()
-	if format == Text {
+	if format == Text || format == MD {
 		if _, err := f.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
 			return err
 		}
@@ -56,7 +70,7 @@ func Generate(s *scanner.Scanner, format Format, output string) (string, error) 
 	content := buf.String()
 	if output != "" {
 		data := []byte(content)
-		if format == Text {
+		if format == Text || format == MD {
 			data = WithBOM(content)
 		}
 		if err := os.WriteFile(output, data, 0o644); err != nil {
@@ -64,6 +78,117 @@ func Generate(s *scanner.Scanner, format Format, output string) (string, error) 
 		}
 	}
 	return content, nil
+}
+
+func genMarkdownTo(s *scanner.Scanner, w io.Writer) error {
+	stats := s.Stats()
+	fmt.Fprintf(w, "# 敏感信息扫描报告\n\n")
+	fmt.Fprintf(w, "- 扫描时长: %.2f 秒\n", stats.ScanDuration)
+	fmt.Fprintf(w, "- 总文件数: %d\n- 已扫描: %d\n- 有问题文件: %d\n- 问题总数: %d\n",
+		stats.TotalFiles, stats.ScannedFiles, stats.FilesWithIssues, stats.TotalIssues)
+	if stats.SkippedFiles > 0 || stats.SkippedDirs > 0 {
+		fmt.Fprintf(w, "- 已跳过: %d 个文件 / %d 个目录\n", stats.SkippedFiles, stats.SkippedDirs)
+	}
+	fmt.Fprintf(w, "\n## 问题级别分布\n\n| 级别 | 数量 |\n| --- | ---: |\n")
+	for _, lv := range types.AllLevels {
+		fmt.Fprintf(w, "| %s | %d |\n", types.LevelConfig[lv].Name, stats.IssuesByLevel[lv])
+	}
+	fmt.Fprintf(w, "\n## 问题文件\n\n")
+	files := s.ResultsByFile(scanner.ResultFilter{})
+	if len(files) == 0 {
+		fmt.Fprintf(w, "未发现敏感信息。\n")
+		return nil
+	}
+	for _, f := range files {
+		count := issueCountText(f.IssueCount, f.IssueOverflow)
+		fmt.Fprintf(w, "### [%s] %s\n\n", types.LevelConfig[f.HighestLevel].Name, f.FilePath)
+		fmt.Fprintf(w, "- 问题数: %s\n- 类型: %s\n\n", count, strings.Join(f.PatternNames, "、"))
+		for _, r := range f.Samples {
+			fmt.Fprintf(w, "- 第 %d 行 `%s`: `%s`\n", r.LineNumber, r.PatternName, cleanInline(r.MatchedText))
+		}
+		fmt.Fprintf(w, "\n")
+	}
+	return nil
+}
+
+func genHTMLTo(s *scanner.Scanner, w io.Writer) error {
+	stats := s.Stats()
+	files := s.ResultsByFile(scanner.ResultFilter{})
+	fmt.Fprintf(w, "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><title>敏感信息扫描报告</title>")
+	fmt.Fprintf(w, "<style>body{font-family:-apple-system,BlinkMacSystemFont,'Microsoft YaHei',sans-serif;margin:24px;color:#1f2933;background:#f6f8fb}main{max-width:1180px;margin:auto}.card{background:#fff;border:1px solid #e3e8ef;border-radius:8px;padding:16px;margin:14px 0}table{width:100%%;border-collapse:collapse;background:#fff}th,td{border-bottom:1px solid #e7edf3;padding:9px;text-align:left;font-size:13px}th{background:#eef3f8}.critical{color:#c0392b;font-weight:700}.high{color:#d35400;font-weight:700}.medium{color:#9a6b00}.low{color:#2878b5}.muted{color:#718096;font-size:12px}</style></head><body><main>")
+	fmt.Fprintf(w, "<h1>敏感信息扫描报告</h1><div class=\"card\">")
+	fmt.Fprintf(w, "<p>扫描时长: %.2f 秒</p><p>总文件数: %d，已扫描: %d，有问题文件: %d，问题总数: %d，跳过: %d 文件 / %d 目录</p>",
+		stats.ScanDuration, stats.TotalFiles, stats.ScannedFiles, stats.FilesWithIssues, stats.TotalIssues, stats.SkippedFiles, stats.SkippedDirs)
+	fmt.Fprintf(w, "</div><div class=\"card\"><h2>级别分布</h2><table><tr><th>级别</th><th>数量</th></tr>")
+	for _, lv := range types.AllLevels {
+		fmt.Fprintf(w, "<tr><td class=\"%s\">%s</td><td>%d</td></tr>", lv, types.LevelConfig[lv].Name, stats.IssuesByLevel[lv])
+	}
+	fmt.Fprintf(w, "</table></div><div class=\"card\"><h2>问题文件</h2>")
+	if len(files) == 0 {
+		fmt.Fprintf(w, "<p>未发现敏感信息。</p>")
+	} else {
+		fmt.Fprintf(w, "<table><tr><th>最高级别</th><th>问题数</th><th>类型</th><th>文件</th><th>示例</th></tr>")
+		for _, f := range files {
+			var samples []string
+			for _, r := range f.Samples {
+				samples = append(samples, fmt.Sprintf("第%d行 %s: %s", r.LineNumber, r.PatternName, cleanPrintable(r.MatchedText)))
+			}
+			fmt.Fprintf(w, "<tr><td class=\"%s\">%s</td><td>%s</td><td>%s</td><td>%s</td><td class=\"muted\">%s</td></tr>",
+				f.HighestLevel, types.LevelConfig[f.HighestLevel].Name, issueCountText(f.IssueCount, f.IssueOverflow),
+				html.EscapeString(strings.Join(f.PatternNames, "、")), html.EscapeString(f.FilePath), html.EscapeString(strings.Join(samples, "\n")))
+		}
+		fmt.Fprintf(w, "</table>")
+	}
+	fmt.Fprintf(w, "</div></main></body></html>")
+	return nil
+}
+
+func genXLSXTo(s *scanner.Scanner, w io.Writer) error {
+	stats := s.Stats()
+	f := excelize.NewFile()
+	defer f.Close()
+	summary := "汇总"
+	filesSheet := "问题文件"
+	detailSheet := "命中明细"
+	f.SetSheetName("Sheet1", summary)
+	_, _ = f.NewSheet(filesSheet)
+	_, _ = f.NewSheet(detailSheet)
+
+	setRow := func(sheet string, row int, vals ...any) {
+		for i, v := range vals {
+			cell, _ := excelize.CoordinatesToCellName(i+1, row)
+			_ = f.SetCellValue(sheet, cell, v)
+		}
+	}
+	setRow(summary, 1, "指标", "数值")
+	setRow(summary, 2, "扫描时长(秒)", stats.ScanDuration)
+	setRow(summary, 3, "总文件数", stats.TotalFiles)
+	setRow(summary, 4, "已扫描文件", stats.ScannedFiles)
+	setRow(summary, 5, "有问题文件", stats.FilesWithIssues)
+	setRow(summary, 6, "问题总数", stats.TotalIssues)
+	setRow(summary, 7, "跳过文件", stats.SkippedFiles)
+	setRow(summary, 8, "跳过目录", stats.SkippedDirs)
+	row := 10
+	setRow(summary, row, "级别", "数量")
+	row++
+	for _, lv := range types.AllLevels {
+		setRow(summary, row, types.LevelConfig[lv].Name, stats.IssuesByLevel[lv])
+		row++
+	}
+
+	setRow(filesSheet, 1, "最高级别", "问题数", "类型", "文件")
+	for i, item := range s.ResultsByFile(scanner.ResultFilter{}) {
+		setRow(filesSheet, i+2, types.LevelConfig[item.HighestLevel].Name, issueCountText(item.IssueCount, item.IssueOverflow), strings.Join(item.PatternNames, "、"), item.FilePath)
+	}
+
+	setRow(detailSheet, 1, "级别", "类型", "文件", "行号", "匹配内容", "上下文")
+	for i, r := range s.Results() {
+		setRow(detailSheet, i+2, types.LevelConfig[r.Level].Name, r.PatternName, r.FilePath, r.LineNumber, cleanPrintable(r.MatchedText), cleanPrintable(r.LineContent))
+	}
+	_ = f.SetColWidth(summary, "A", "B", 18)
+	_ = f.SetColWidth(filesSheet, "A", "D", 24)
+	_ = f.SetColWidth(detailSheet, "A", "F", 22)
+	return f.Write(w)
 }
 
 // WithBOM 在内容前加 UTF-8 BOM，返回可直接写入的字节切片。
@@ -156,4 +281,15 @@ func cleanPrintable(s string) string {
 		b.WriteRune(r)
 	}
 	return b.String()
+}
+
+func issueCountText(count int, overflow bool) string {
+	if overflow {
+		return fmt.Sprintf("%d+", count)
+	}
+	return fmt.Sprintf("%d", count)
+}
+
+func cleanInline(s string) string {
+	return strings.ReplaceAll(cleanPrintable(s), "`", "'")
 }
