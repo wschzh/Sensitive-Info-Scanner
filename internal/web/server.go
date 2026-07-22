@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -86,6 +87,7 @@ func (s *Server) routes() *http.ServeMux {
 	mux.HandleFunc("/api/exit", s.handleExit)
 	mux.HandleFunc("/api/patterns", s.handlePatterns)
 	mux.HandleFunc("/api/delete", s.handleDelete)
+	mux.HandleFunc("/api/open", s.handleOpenPath)
 	return mux
 }
 
@@ -483,6 +485,82 @@ func (s *Server) handleDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"results": out, "deleted": deleted, "total": len(out)})
 }
 
+// handleOpenPath 打开当前扫描结果中的单个文件，或打开该文件所在目录。
+// 安全约束：仅允许打开「当前扫描结果集中出现过的路径」，避免前端伪造任意路径。
+func (s *Server) handleOpenPath(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "仅支持 POST", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		Path   string `json:"path"`
+		Target string `json:"target"` // file 或 folder
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "请求解析失败: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.Path = strings.TrimSpace(req.Path)
+	if req.Path == "" {
+		http.Error(w, "path 不能为空", http.StatusBadRequest)
+		return
+	}
+	if req.Target != "folder" {
+		req.Target = "file"
+	}
+
+	allowed := false
+	for _, res := range s.currentScanner().Results() {
+		if res.FilePath == req.Path {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		http.Error(w, "不在当前结果集中，已拒绝（安全限制）", http.StatusForbidden)
+		return
+	}
+	if _, err := os.Stat(req.Path); err != nil {
+		http.Error(w, "路径不可访问: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := openLocalPath(req.Path, req.Target); err != nil {
+		http.Error(w, "打开失败: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+func openLocalPath(path, target string) error {
+	openPath := path
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	isDir := fi.IsDir()
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "windows":
+		if target == "folder" && !isDir {
+			cmd = exec.Command("explorer", "/select,", path)
+		} else {
+			cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", openPath)
+		}
+	case "darwin":
+		if target == "folder" && !isDir {
+			cmd = exec.Command("open", "-R", path)
+		} else {
+			cmd = exec.Command("open", openPath)
+		}
+	default:
+		if target == "folder" && !isDir {
+			openPath = filepath.Dir(path)
+		}
+		cmd = exec.Command("xdg-open", openPath)
+	}
+	return cmd.Start()
+}
+
 func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 	sc := s.currentScanner()
 	rawFormat := r.URL.Query().Get("format")
@@ -530,6 +608,17 @@ func (s *Server) handleReport(w http.ResponseWriter, r *http.Request) {
 //	path 为目录：返回其下的子目录（file=1 时同时返回文件，供后续选可执行文件）
 //	无权限 / 不存在：HTTP 仍 200，在 error 字段返回友好提示
 func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
+	defer func() {
+		if v := recover(); v != nil {
+			diag.Printf("browse panic path=%q panic=%v", r.URL.Query().Get("path"), v)
+			writeJSON(w, map[string]any{
+				"path":    r.URL.Query().Get("path"),
+				"parent":  "",
+				"entries": []any{},
+				"error":   fmt.Sprintf("目录浏览异常: %v", v),
+			})
+		}
+	}()
 	q := r.URL.Query()
 	p := q.Get("path")
 	wantFile := q.Get("file") == "1"
@@ -594,6 +683,10 @@ func (s *Server) handleBrowse(w http.ResponseWriter, r *http.Request) {
 		isDir := e.IsDir()
 		if !wantFile && !isDir {
 			continue // 默认只列子目录，避免文件过多撑爆列表
+		}
+		if len(resp.Entries) >= 1000 {
+			resp.Error = "目录内容过多，仅显示前 1000 项，请进入更具体的子目录或直接输入路径"
+			break
 		}
 		resp.Entries = append(resp.Entries, browseEntry{
 			Name:  e.Name(),

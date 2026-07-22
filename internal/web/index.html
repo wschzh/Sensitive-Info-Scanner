@@ -27,6 +27,7 @@
   button.ghost { background: #607180; }
   button.secondary { background:#eef3f8; color:#263746; border:1px solid #cfdae5; }
   button.sm { padding: 5px 10px; margin: 0 4px; font-size:12px; }
+  button.icon-action { background:#f6faf7; color:#1f6f3a; border:1px solid #cfe7d6; }
   .progress { width: 100%; height: 12px; background: #e5ebf2; border-radius: 999px; overflow: hidden; }
   .progress-bar { height: 100%; background: linear-gradient(90deg, #2878b5, #2ca86f); transition: width .2s; width: 0; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -50,6 +51,11 @@
   .summary-columns { display:grid; grid-template-columns: minmax(220px, 1fr) minmax(280px, 1.4fr); gap:16px; }
   .mini-list { margin:0; padding-left:18px; color:#405060; font-size:13px; }
   .mini-list li { margin:5px 0; }
+  .report-panel { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:12px 14px; border:1px solid #c9dff1; border-radius:8px; background:linear-gradient(180deg,#f7fbff,#eef6fd); margin-top:12px; }
+  .report-title { font-weight:700; color:#1f4f7a; margin-bottom:3px; }
+  .report-actions { display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-end; align-items:center; }
+  .report-actions select { min-width:140px; }
+  .report-actions button { min-width:104px; }
   .toolbar { margin-bottom: 10px; padding: 10px; background: #f8fafc; border:1px solid #e5ecf3; border-radius: 8px; font-size: 13px; display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
   .toolbar select { margin: 0 4px; }
   .pager { margin-top: 10px; text-align: center; color: #666; font-size: 13px; }
@@ -70,7 +76,8 @@
   .footer { text-align:right; color:#9aa7b4; font-size:12px; padding:4px 2px 0; }
   @media (max-width: 820px) {
     .app { padding: 12px; }
-    .topbar, .summary-columns { display:block; }
+    .topbar, .summary-columns, .report-panel { display:block; }
+    .report-actions { justify-content:flex-start; margin-top:10px; }
     .control-grid, .summary-grid { grid-template-columns: 1fr; }
   }
 </style>
@@ -129,11 +136,22 @@
   <div class="actions">
     <button id="btnScan" onclick="startScan()">开始扫描</button>
     <button id="btnStop" class="danger" onclick="stopScan()" disabled>停止</button>
-    <button class="secondary" onclick="exportReport('text')">Text</button>
-    <button class="secondary" onclick="exportReport('md')">Markdown</button>
-    <button class="secondary" onclick="exportReport('html')">HTML</button>
-    <button class="secondary" onclick="exportReport('xlsx')">Excel</button>
-    <button class="secondary" onclick="exportReport('json')">JSON</button>
+  </div>
+  <div class="report-panel">
+    <div>
+      <div class="report-title">导出扫描报告</div>
+      <div class="muted">扫描中也可导出当前已发现结果；扫描完成后建议先导出留档再处理文件。</div>
+    </div>
+    <div class="report-actions">
+      <select id="reportFormat" title="选择导出格式">
+        <option value="xlsx">Excel (.xlsx)</option>
+        <option value="html">HTML (.html)</option>
+        <option value="md">Markdown (.md)</option>
+        <option value="text">Text (.txt)</option>
+        <option value="json">JSON (.json)</option>
+      </select>
+      <button onclick="exportSelectedReport()">导出报告</button>
+    </div>
   </div>
 </div>
 
@@ -178,7 +196,9 @@
     </select>
     搜索:<input type="text" id="fsearch" size="22" placeholder="文件名 / 内容 / 匹配">
     <span id="fcount" class="muted"></span>
-    <button type="button" class="danger sm" id="btnDel" onclick="deleteSelected()" disabled style="margin-left:8px">删除选中</button>
+    <button type="button" class="icon-action sm" id="btnOpenFile" onclick="openSelected('file')" disabled title="仅支持打开单个选中结果">打开文件</button>
+    <button type="button" class="icon-action sm" id="btnOpenFolder" onclick="openSelected('folder')" disabled title="仅支持打开单个选中结果所在位置">打开文件夹</button>
+    <button type="button" class="danger sm" id="btnDel" onclick="deleteSelected()" disabled title="支持批量删除选中的多个文件" style="margin-left:8px">删除选中</button>
     <span id="selCount" class="muted"></span>
   </div>
   <table>
@@ -604,7 +624,7 @@ function renderResults() {
     `<button class="sm" onclick="loadPage(${curPage+1})" ${curPage>=pages?'disabled':''}>下一页</button>`;
 }
 
-// ===== 结果选中 / 删除 =====
+// ===== 结果选中 / 打开 / 删除 =====
 document.getElementById('results').addEventListener('change', updateSelState);
 
 function toggleAll(master) {
@@ -615,15 +635,40 @@ function toggleAll(master) {
 function updateSelState() {
   const boxes = document.querySelectorAll('.row-sel');
   const checked = [...boxes].filter(b => b.checked);
+  document.getElementById('btnOpenFile').disabled = checked.length === 0;
+  document.getElementById('btnOpenFolder').disabled = checked.length === 0;
   document.getElementById('btnDel').disabled = checked.length === 0;
   document.getElementById('selCount').textContent = checked.length > 0 ? `已选 ${checked.length} 个` : '';
   const selAll = document.getElementById('selAll');
   if (selAll) selAll.checked = boxes.length > 0 && checked.length === boxes.length;
 }
 
-async function deleteSelected() {
-  const paths = [...new Set([...document.querySelectorAll('.row-sel:checked')]
+function selectedResultPaths() {
+  return [...new Set([...document.querySelectorAll('.row-sel:checked')]
     .map(b => b.dataset.path).filter(Boolean))];
+}
+
+async function openSelected(target) {
+  const paths = selectedResultPaths();
+  if (paths.length === 0) return;
+  if (paths.length > 1) {
+    alert('一次只能打开一个文件或文件夹，请只选择一条结果。');
+    return;
+  }
+  const label = target === 'folder' ? '文件夹' : '文件';
+  try {
+    const res = await fetch('/api/open', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({path: paths[0], target})
+    });
+    if (!res.ok) throw new Error(await res.text());
+  } catch (e) {
+    alert(`打开${label}失败: ${String(e).trim()}`);
+  }
+}
+
+async function deleteSelected() {
+  const paths = selectedResultPaths();
   if (paths.length === 0) return;
   const preview = paths.slice(0, 5).join('\n') + (paths.length > 5 ? `\n…等共 ${paths.length} 个文件` : '');
   if (!confirm(`⚠️ 确定删除以下 ${paths.length} 个文件？此操作不可恢复！\n\n${preview}`)) return;
@@ -668,9 +713,9 @@ async function loadBrowser() {
   list.innerHTML = '<div class="muted" style="padding:10px">加载中…</div>';
   let r;
   try {
-    r = await (await fetch('/api/browse?path=' + encodeURIComponent(browserCurPath))).json();
+    r = await fetchJSON('/api/browse?path=' + encodeURIComponent(browserCurPath), {}, 10000);
   } catch (e) {
-    list.innerHTML = '<div class="muted" style="padding:10px">请求失败: ' + escapeHtml(String(e)) + '</div>';
+    list.innerHTML = '<div class="muted" style="padding:10px">目录加载失败：' + escapeHtml(String(e).trim()) + '</div>';
     return;
   }
   document.getElementById('browserPath').textContent = r.path || '（选择起始位置）';
@@ -712,7 +757,11 @@ function pickDir() {
   closeBrowser();
 }
 
-function exportReport(fmt) { window.open('/api/report?format=' + fmt); }
+function exportSelectedReport() {
+  exportReport(document.getElementById('reportFormat').value);
+}
+
+function exportReport(fmt) { window.open('/api/report?format=' + encodeURIComponent(fmt)); }
 function shortPath(p) { p = p||''; return p.length <= 50 ? p : '…' + p.slice(-49); }
 function shortMatch(s) { s = String(s||'').replace(/\s+/g, ' ').trim(); return s.length <= 80 ? s : s.slice(0, 77) + '...'; }
 function eventName(e) {
